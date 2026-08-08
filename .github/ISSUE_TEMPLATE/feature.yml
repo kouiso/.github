@@ -29,40 +29,13 @@ body:
       required: false
 
   - type: textarea
-    id: reference-visuals
+    id: clues
     attributes:
-      label: "参考になる画像・動画（任意）"
-      description: "この枠にドラッグ&ドロップするか、コピーしたものを貼り付けてください。似た機能の画面写真でも助かります。"
-    validations:
-      required: false
-
-  - type: input
-    id: figma-url
-    attributes:
-      label: "FigmaのURL（任意）"
-      placeholder: "https://www.figma.com/design/..."
-    validations:
-      required: false
-
-  - type: input
-    id: page-url
-    attributes:
-      label: "その画面のURL（任意）"
-      placeholder: "https://..."
-    validations:
-      required: false
-
-  - type: textarea
-    id: how-to
-    attributes:
-      label: "やり方の指定（任意・エンジニア向け）"
-      description: "作り方に注文がある時だけ。無ければ空のままで構いません。"
+      label: "手がかり（任意）"
+      description: "画像や動画は、この枠にドラッグ&ドロップするか貼り付けてください。似た機能の画面写真でも助かります。"
       value: |
-        > [!WARNING]
-        > ここに書いた内容は「指定」として扱われます。より良い進め方に気づいても、勝手に変えず確認をとります。
-
-        - 画面URL：
-        - 該当ファイルパス：
+        - 画面のURL：
+        - Figma：
     validations:
       required: false
 
@@ -78,7 +51,6 @@ body:
 
         - [ ] 〇〇の画面で△△ができるようになっとる
         - [ ] 表示がデザイン（Figma等）と合っとる
-        - [ ] 対象の環境すべてで動く
         - [ ] 今ある機能が崩れとらん
 
         </details>
@@ -94,40 +66,6 @@ body:
     id: else
     attributes:
       label: "その他（任意）"
-      description: "先に共有しとくほど、後の往復が減ります。調べたけど確定できんかった点もここへ。"
-    validations:
-      required: false
-
-  # ⚠️ この how-to-read ブロックは bug.yml と完全に同一です。
-  #    文面を変更するときは、必ず両方のファイルに同じ内容を反映してください。
-  - type: textarea
-    id: how-to-read
-    attributes:
-      label: "この Issue の読み方（この欄はさわらんでOK）"
-      description: "書き換え不要です。そのまま送信してください。"
-      value: |
-        > [!IMPORTANT]
-        > **ここに書いてあるのは、依頼そのものやなく、書いた人の解釈です。**
-        >
-        > **書く人へ**
-        > 根拠なしに断定せん。断定するなら根拠も一緒に書く。
-        > 頼まれた言葉を写すだけで終わらせず、その依頼が本当は何を目指しとるかを書く。
-        > 判断がつかんかった所は、どこがなぜ分からんかったかを書く。
-        >
-        > **着手する人へ**
-        > まず親Issue、元の会話、コード、ログを自分で開いて、本文と突き合わせる。
-        >
-        > **止まって確認すること** — 外から見える形が変わる場合。
-        > 利用者に見える挙動、保存されるデータ、外部との取り決め、対応する範囲、完了する時期。
-        > 目的・本文の記述・提案する形・そう考える理由の4点を書いて、指示者の返答を待つ。
-        >
-        > **止まらず進めてよいこと** — 外から見える形が変わらん場合。
-        > 実装の順序、内部の構造、使うライブラリ、命名。選んだ理由をPRに1行残す。
-        >
-        > 進められん事情が出た時も同じです。できないと報告して終わらせず、
-        > 目的・詰まっとる箇所・取りうる案を書いて返答を待つ。
-        >
-        > **本番障害やデータ損失が進行しとる場合は例外です。** 復旧を最優先でよい。
-        > 何をどう判断して進めたかは、収束後にこのIssueに残す。
+      description: "作り方に注文がある場合もここへ。書かれた内容は「指定」として扱い、勝手に変えず確認をとります。"
     validations:
       required: false

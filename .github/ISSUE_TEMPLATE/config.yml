@@ -1,1 +1,5 @@
 blank_issues_enabled: false
+contact_links:
+  - name: "📖 書き方・読み方のガイド"
+    url: "https://github.com/kouiso/.github/blob/master/.github/CONTRIBUTING.md"
+    about: "Issue と PR を書く時・着手する時・レビューする時に読むもの"
