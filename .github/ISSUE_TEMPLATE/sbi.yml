@@ -1,0 +1,15 @@
+name: "🔧 SBI（作業分解）"
+description: "PBI を実装単位に分解する時に使います。本文は空のままでも構いません。"
+labels: []
+body:
+  - type: textarea
+    id: note
+    attributes:
+      label: "メモ（任意）"
+      description: |
+        書きたいことがあれば。空のままで構いません。
+
+        親PBIとの紐付けは本文には書きません。`gh issue create --parent <親issue番号>` で作るか、
+        親Issue下部の「Create sub-issue」から作ってください。そちらが正式なサブIssueの関係になります。
+    validations:
+      required: false
