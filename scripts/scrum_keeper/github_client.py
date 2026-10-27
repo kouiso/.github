@@ -19,6 +19,13 @@ class GhError(Exception):
     pass
 
 
+class GhRateLimit(GhError):
+    """上限の返事（一次・二次どちらも）。再試行と HALT の数え方が他の失敗と違うので別の型にする。"""
+
+
+RATE_LIMIT_RE = re.compile(r"rate limit|secondary rate|\b429\b|abuse|RATE_LIMITED", re.I)
+
+
 def gh_path() -> str:
     env = os.environ.get("SCRUM_KEEPER_GH")
     if env:
@@ -124,8 +131,8 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
                     it.estimate = fv["number"]
                 elif fname == "Carryover":
                     it.carryover = fv["number"]
-            elif "date" in fv and fname == "End date":
-                it.end_date = dt.date.fromisoformat(fv["date"])
+            elif "date" in fv and fname in ("Start date", "End date"):
+                setattr(it, "start_date" if fname == "Start date" else "end_date", dt.date.fromisoformat(fv["date"]))
         board.items.append(it)
     return board
 
@@ -156,9 +163,22 @@ class GhClient:
         try:
             d = json.loads(p.stdout)
         except ValueError:
+            d = None
+        errors = (d or {}).get("errors") if isinstance(d, dict) else None
+        if p.returncode != 0 or errors:
+            # 中身（題名など）に "rate limit" と書いてあっても誤判定せんよう、失敗の時の返事だけを見る
+            blob = p.stderr + " " + " ".join(f"{e.get('type', '')} {e.get('message', '')}" for e in (errors or [])
+                                              if isinstance(e, dict))
+            if p.returncode != 0 and d is None:
+                blob += " " + p.stdout
+            elif isinstance(d, dict) and not errors:
+                blob += " " + str(d.get("message", ""))
+            if RATE_LIMIT_RE.search(blob):
+                raise GhRateLimit("rate limited")
+        if d is None:
             raise GhError(f"gh exit {p.returncode}: unparseable output")
-        if d.get("errors") and not d.get("data"):
-            raise GhError("graphql error: " + str(d["errors"][0].get("type") or d["errors"][0].get("message", ""))[:120])
+        if errors and not d.get("data"):
+            raise GhError("graphql error: " + str(errors[0].get("type") or errors[0].get("message", ""))[:120])
         if p.returncode != 0:
             raise GhError(f"gh exit {p.returncode}")
         return d
@@ -231,12 +251,17 @@ class GhClient:
             after = page["pageInfo"]["endCursor"]
 
     # ---- 書き ----
-    def set_item_fields(self, board: Board, item: Item, iteration_id: str | None, carryover: int | None) -> None:
+    def set_item_fields(self, board: Board, item: Item, iteration_id: str | None, carryover: int | None,
+                        start_date: dt.date | None = None, end_date: dt.date | None = None) -> None:
         parts = []
         if iteration_id:
             parts.append(self._set_value("a", board, item, "Iteration", f"{{iterationId:{_lit(iteration_id)}}}"))
         if carryover is not None:
             parts.append(self._set_value("b", board, item, "Carryover", f"{{number:{carryover}}}"))
+        if start_date is not None:
+            parts.append(self._set_value("c", board, item, "Start date", f"{{date:{_lit(start_date.isoformat())}}}"))
+        if end_date is not None:
+            parts.append(self._set_value("d", board, item, "End date", f"{{date:{_lit(end_date.isoformat())}}}"))
         self._gql("mutation{" + " ".join(parts) + "}")
 
     @staticmethod
@@ -291,6 +316,7 @@ class FakeClient:
         self.reads = 0
         self.before_read_item = None  # 競合の再現用フック: f(board, item)
         self.fail_writes = False
+        self.rate_limit_writes = 0  # 次の N 回の書き込みを上限の返事にする
         self.auth_ok = True
 
     @classmethod
@@ -348,17 +374,24 @@ class FakeClient:
         return [(n, nid) for n, nid, kind in self.repos[repo]["issues"] if kind == "Issue"]
 
     def _check(self):
+        if self.rate_limit_writes > 0:
+            self.rate_limit_writes -= 1
+            raise GhRateLimit("injected rate limit")
         if self.fail_writes:
             raise GhError("injected failure")
 
-    def set_item_fields(self, board, item, iteration_id, carryover):
+    def set_item_fields(self, board, item, iteration_id, carryover, start_date=None, end_date=None):
         self._check()
         live = self._live_item(board, item)
         if iteration_id:
             live.iteration_id = iteration_id
         if carryover is not None:
             live.carryover = carryover
-        self.writes.append(("item", board.ref, item.key, iteration_id, carryover))
+        if start_date is not None:
+            live.start_date = start_date
+        if end_date is not None:
+            live.end_date = end_date
+        self.writes.append(("item", board.ref, item.key, iteration_id, carryover, start_date, end_date))
 
     def update_iteration_config(self, board, iterations):
         self._check()

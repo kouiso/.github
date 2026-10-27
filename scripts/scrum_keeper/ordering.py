@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from .model import Item, PRIORITY_RANK
 
+EPS = 1e-9  # 足し算の順で出る小数の誤差で、ちょうどの件が溢れ扱いにならんように
+
 
 def order_key(item: Item):
     pr = PRIORITY_RANK.get(item.priority or "", 3)
     end = item.end_date.toordinal() if item.end_date else 10**9
-    return (pr, end, item.number)
+    return (pr, end, item.repo, item.number)
 
 
 def sort_plain(items: list[Item]) -> list[Item]:
@@ -29,6 +31,6 @@ def overflow(ordered: list[Item], limit: float) -> list[Item]:
     cum = 0.0
     for idx, it in enumerate(ordered):
         cum += it.est
-        if cum > limit:
+        if cum > limit + EPS:
             return list(ordered[idx:])
     return []

@@ -36,6 +36,7 @@ def raw_project(items, weeks=None, description=DESC, title="Board", completed_be
         {"id": "F_wait", "name": "Wait", "dataType": "SINGLE_SELECT", "options": _opts("W1", "W2", "W3")},
         {"id": "F_est", "name": "Estimate", "dataType": "NUMBER"},
         {"id": "F_carry", "name": "Carryover", "dataType": "NUMBER"},
+        {"id": "F_start", "name": "Start date", "dataType": "DATE"},
         {"id": "F_end", "name": "End date", "dataType": "DATE"},
         {"id": "F_iter", "name": "Iteration", "dataType": "ITERATION",
          "configuration": {"duration": 7, "iterations": active, "completedIterations": done}},
@@ -63,6 +64,8 @@ def raw_item(i):
         fv.append({"number": i["est"], **f("Estimate")})
     if i.get("carry") is not None:
         fv.append({"number": i["carry"], **f("Carryover")})
+    if i.get("start"):
+        fv.append({"date": i["start"], **f("Start date")})
     if i.get("end"):
         fv.append({"date": i["end"], **f("End date")})
     if kind == "DraftIssue":
@@ -89,7 +92,10 @@ def make_client(*boards, repos=None):
     return FakeClient({b.ref: b for b in boards}, repos)
 
 
-def run(tmp_path, client, *extra, board="o/1", job="all", now=NOW_MON, allow=None):
+def run(tmp_path, client, *extra, board="o/1", job="all", now=NOW_MON, allow=None, verified="*"):
+    if verified is not None:  # 反復の設定の書き直しは、測り終えた Project だけ（本番の仕組みと同じ）
+        (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "state" / "extend-verified.txt").write_text(verified + "\n")
     args = (["--allow", str(allow)] if allow else ["--board", board]) + [
         "--job", job, "--now", now, "--ledger-dir", str(tmp_path / "ledger"),
         "--state-dir", str(tmp_path / "state"), "--halt-file", str(tmp_path / "ledger" / "HALT"),

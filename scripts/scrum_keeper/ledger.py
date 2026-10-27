@@ -29,6 +29,10 @@ class Halted(Exception):
     """HALT を書いた。この回は止める。"""
 
 
+class HaltPresent(Halted):
+    """この回の途中で誰かが HALT を置いた。自分で書いたのではないので終了コードは 0。"""
+
+
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 

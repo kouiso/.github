@@ -76,6 +76,7 @@ class Item:
     iteration_id: str | None = None
     priority: str | None = None
     estimate: float | None = None
+    start_date: dt.date | None = None
     end_date: dt.date | None = None
     wait: str | None = None
     carryover: float | None = None

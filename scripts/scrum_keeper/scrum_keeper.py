@@ -23,8 +23,8 @@ import os
 from .github_client import FakeClient, GhClient, GhError, gh_auth_ok
 from .job import (Ctx, DEFAULT_CAPACITY, Runner, WEEKS_AHEAD, job_capacity, job_carryover, job_extend,
                   job_fill_new_week, job_okawari, job_report, job_stalled_a, job_stalled_b, job_sync)
-from .ledger import Halted, Ledger, LockBusy, halt_present
-from .model import BOARD_MARKER, Board, parse_capacity, parse_now
+from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present
+from .model import BOARD_MARKER, Board, parse_capacity, parse_now, to_jst, week_start
 
 JOB_CHOICES = ["all", "extend", "carryover", "stalled", "okawari", "sync", "report", "capacity"]
 STATE_DIR_DEFAULT = Path.home() / ".local/state/scrum-keeper"
@@ -76,35 +76,57 @@ def select_boards(client, args) -> list[Board]:
     return boards
 
 
-def due_jobs(job: str, now: dt.datetime) -> list[str]:
+def read_last_run(state_dir: Path) -> dt.datetime | None:
+    try:
+        return to_jst(dt.datetime.fromisoformat((state_dir / "last-run").read_text().strip()))
+    except (OSError, ValueError):
+        return None
+
+
+def read_extend_verified(state_dir: Path) -> set[str]:
+    """反復の設定の書き直しが id を保つと、試しの写しで測り終えた Project（1 行 1 つ。`*` は全部）。"""
+    try:
+        lines = (state_dir / "extend-verified.txt").read_text().splitlines()
+    except OSError:
+        return set()
+    return {ln.split("#", 1)[0].strip() for ln in lines if ln.split("#", 1)[0].strip()}
+
+
+def due_jobs(job: str, now: dt.datetime, last_run: dt.datetime | None = None) -> list[str]:
+    """時刻の窓は使わん。Mac が窓の間ずっと寝とっても、起きた最初の回で取り戻すため。
+
+    どの仕事も二度走らせて安全。週に 1 回・日に 1 回の物は、前の成功した回（last-run）より後の最初の回で走る。
+    """
     if job != "all":
         return {"stalled": ["stalled-a", "stalled-b"]}.get(job, [job])
-    monday_window = now.weekday() == 0 and now.hour < 3
-    daily_window = now.hour < 3
-    jobs: list[str] = []
-    if monday_window:
-        jobs += ["extend", "capacity", "carryover"]
-    jobs.append("stalled-a")
-    if daily_window:
+    new_week = last_run is None or week_start(last_run) < week_start(now)
+    new_day = last_run is None or to_jst(last_run).date() < now.date()
+    jobs = ["extend"]
+    if new_week:
+        jobs.append("capacity")
+    jobs += ["carryover", "stalled-a"]
+    if new_day:
         jobs.append("stalled-b")
     jobs += ["okawari", "sync"]
-    if monday_window:
+    if new_week:
         jobs.append("report")
     return jobs
 
 
 def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str]) -> None:
-    per_board = {"carryover": job_carryover, "stalled-a": job_stalled_a, "stalled-b": job_stalled_b,
-                 "okawari": job_okawari, "sync": job_sync, "report": job_report}
+    per_board = {"carryover": job_carryover, "stalled-a": job_stalled_a, "sync": job_sync, "report": job_report}
     eighth = ctx.monday + dt.timedelta(days=7 * (WEEKS_AHEAD - 1))
     for job in jobs:
         if job == "capacity":
             job_capacity(rn, ctx)
         elif job == "extend":
-            for b in ctx.boards:
-                added = job_extend(rn, b, ctx)
-                if eighth in added:
-                    job_fill_new_week(rn, b, ctx, eighth)
+            filled = [b for b in ctx.boards if eighth in job_extend(rn, b, ctx)]
+            if filled:
+                job_fill_new_week(rn, ctx, eighth, filled)
+        elif job == "stalled-b":
+            job_stalled_b(rn, ctx)
+        elif job == "okawari":
+            job_okawari(rn, ctx)
         else:
             for b in ctx.boards:
                 per_board[job](rn, b, ctx)
@@ -147,7 +169,8 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
                 return 5
             client = GhClient()
     ledger = Ledger(Path(args.ledger_dir) if args.ledger_dir else None, halt)
-    rn = Runner(client, ledger, args.dry_run, args.max_writes, halt, log)
+    rn = Runner(client, ledger, args.dry_run, args.max_writes, halt, log,
+                extend_verified=read_extend_verified(state_dir), streak_file=state_dir / "rate-limit-streak")
     try:
         ledger.check_disk()
         boards = select_boards(client, args)
@@ -160,9 +183,12 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         cap = parse_capacity(cap_desc)
         ctx = Ctx(now=now, boards=boards, capacity=cap[0] if cap else DEFAULT_CAPACITY,
                   count_from=cap[1] if cap else None, capacity_ref=cap_ref)
-        jobs = due_jobs(args.job, now)
+        jobs = due_jobs(args.job, now, read_last_run(state_dir))
         log(f"tick boards={len(boards)} jobs={','.join(jobs)}")
         run_jobs(rn, ctx, jobs)
+    except HaltPresent:
+        print("HALT")
+        return 0
     except Halted:
         log("HALT written, stopped")
         return 6
@@ -179,7 +205,8 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
     if args.dry_run:
         sys.stdout.write(rn.csv_text())
         return 0
-    (state_dir / "last-run").write_text(now.isoformat(timespec="seconds") + "\n")
+    if args.job == "all":  # 手で 1 つだけ走らせた回は、週・日に 1 回の仕事の目印にせん
+        (state_dir / "last-run").write_text(now.isoformat(timespec="seconds") + "\n")
     return 0
 
 

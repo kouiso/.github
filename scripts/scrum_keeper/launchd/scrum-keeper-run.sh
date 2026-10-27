@@ -19,11 +19,23 @@ case "$HALT_FILE$LEDGER_DIR$CAPACITY_BOARD" in
   *__HALT_FILE__*|*__LEDGER_DIR__*|*__CAPACITY_BOARD__*) echo "scrum-keeper-run: placeholders not replaced" >&2; exit 2 ;;
 esac
 
-# 決めた commit 以外のコードは動かさん（worktree が書き換わっても止まる）
+# 決めた commit 以外のコードは動かさん。HEAD が pinned-sha と同じだけでは足りん:
+# 未コミットの書き換えと、足された未追跡のファイル（json.py など。import で先に読まれる）も止める。
+# .gitignore で除ける __pycache__ だけは許す。
 pinned="$(cat "$STATE/pinned-sha" 2>/dev/null || true)"
 head="$("$GIT" -C "$WORKTREE" rev-parse HEAD 2>/dev/null || true)"
 if [ -z "$pinned" ] || [ "$pinned" != "$head" ]; then
   echo "scrum-keeper-run: worktree HEAD does not match pinned-sha" >&2
+  exit 9
+fi
+dirty="$("$GIT" -C "$WORKTREE" status --porcelain --untracked-files=all 2>/dev/null; echo "rc=$?")"
+if [ "$dirty" != "rc=0" ]; then
+  echo "scrum-keeper-run: worktree is not clean" >&2
+  exit 9
+fi
+ignored="$("$GIT" -C "$WORKTREE" ls-files --others --ignored --exclude-standard 2>/dev/null | grep -v '/__pycache__/' || true)"
+if [ -n "$ignored" ]; then
+  echo "scrum-keeper-run: worktree has ignored files" >&2
   exit 9
 fi
 
@@ -32,7 +44,7 @@ if [ "$#" -eq 0 ]; then
   set -- --allow "$STATE/allow.txt"
 fi
 
-run=("$PYTHON" "$WORKTREE/scripts/scrum_keeper/scrum_keeper.py" "$@" --job all
+run=("$PYTHON" -I "$WORKTREE/scripts/scrum_keeper/scrum_keeper.py" "$@" --job all
      --halt-file "$HALT_FILE" --ledger-dir "$LEDGER_DIR" --state-dir "$STATE"
      --capacity-board "$CAPACITY_BOARD")
 
