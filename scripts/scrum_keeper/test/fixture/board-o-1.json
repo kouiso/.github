@@ -79,6 +79,11 @@
      "dataType": "NUMBER"
     },
     {
+     "id": "F_start",
+     "name": "Start date",
+     "dataType": "DATE"
+    },
+    {
      "id": "F_end",
      "name": "End date",
      "dataType": "DATE"

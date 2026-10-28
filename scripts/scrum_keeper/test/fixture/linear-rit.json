@@ -1,0 +1,435 @@
+{
+ "linear": {
+  "types": {
+   "Team": [
+    "activeCycle",
+    "id",
+    "issues",
+    "key",
+    "name",
+    "createdAt"
+   ],
+   "Cycle": [
+    "endsAt",
+    "id",
+    "issues",
+    "name",
+    "number",
+    "startsAt",
+    "createdAt"
+   ],
+   "Issue": [
+    "cycle",
+    "dueDate",
+    "estimate",
+    "id",
+    "identifier",
+    "labels",
+    "number",
+    "priority",
+    "state",
+    "updatedAt",
+    "createdAt"
+   ],
+   "WorkflowState": [
+    "id",
+    "name",
+    "type",
+    "createdAt"
+   ]
+  },
+  "teams": [
+   {
+    "id": "27ad1b97-2c57-442a-9612-e538a50a22cb",
+    "key": "RIT",
+    "name": "RIT"
+   }
+  ],
+  "activeCycles": {
+   "RIT": {
+    "id": "cyc-3",
+    "number": 3,
+    "name": "Cycle 3",
+    "startsAt": "2026-11-02T00:00:00Z",
+    "endsAt": "2026-11-09T00:00:00Z",
+    "issues": [
+     {
+      "id": "lin-RIT-43",
+      "identifier": "RIT-43",
+      "number": 43,
+      "title": "SECRET-TITLE-XYZ",
+      "priority": 1,
+      "estimate": 3,
+      "dueDate": null,
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "state": {
+       "id": "st-started",
+       "name": "In Progress",
+       "type": "started"
+      },
+      "labels": {
+       "nodes": [
+        {
+         "name": "待ち:局長"
+        }
+       ]
+      },
+      "cycle": {
+       "id": "cyc-3"
+      }
+     },
+     {
+      "id": "lin-RIT-44",
+      "identifier": "RIT-44",
+      "number": 44,
+      "title": "SECRET-TITLE-XYZ",
+      "priority": 2,
+      "estimate": null,
+      "dueDate": null,
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "state": {
+       "id": "st-unstarted",
+       "name": "Todo",
+       "type": "unstarted"
+      },
+      "labels": {
+       "nodes": [
+        {
+         "name": "待ち:実機"
+        }
+       ]
+      },
+      "cycle": {
+       "id": "cyc-3"
+      }
+     },
+     {
+      "id": "lin-RIT-45",
+      "identifier": "RIT-45",
+      "number": 45,
+      "title": "SECRET-TITLE-XYZ",
+      "priority": 0,
+      "estimate": 2,
+      "dueDate": null,
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "state": {
+       "id": "st-unstarted",
+       "name": "Todo",
+       "type": "unstarted"
+      },
+      "labels": {
+       "nodes": [
+        {
+         "name": "待ち:局長"
+        }
+       ]
+      },
+      "cycle": {
+       "id": "cyc-3"
+      }
+     },
+     {
+      "id": "lin-RIT-46",
+      "identifier": "RIT-46",
+      "number": 46,
+      "title": "SECRET-TITLE-XYZ",
+      "priority": 3,
+      "estimate": 5,
+      "dueDate": null,
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "state": {
+       "id": "st-completed",
+       "name": "Done",
+       "type": "completed"
+      },
+      "labels": {
+       "nodes": []
+      },
+      "cycle": {
+       "id": "cyc-3"
+      }
+     },
+     {
+      "id": "lin-RIT-47",
+      "identifier": "RIT-47",
+      "number": 47,
+      "title": "SECRET-TITLE-XYZ",
+      "priority": 3,
+      "estimate": 1,
+      "dueDate": null,
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "state": {
+       "id": "st-canceled",
+       "name": "Canceled",
+       "type": "canceled"
+      },
+      "labels": {
+       "nodes": []
+      },
+      "cycle": {
+       "id": "cyc-3"
+      }
+     }
+    ]
+   }
+  },
+  "issues": {
+   "RIT": [
+    {
+     "id": "lin-RIT-43",
+     "identifier": "RIT-43",
+     "number": 43,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 1,
+     "estimate": 3,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-started",
+      "name": "In Progress",
+      "type": "started"
+     },
+     "labels": {
+      "nodes": [
+       {
+        "name": "待ち:局長"
+       }
+      ]
+     },
+     "cycle": {
+      "id": "cyc-3"
+     }
+    },
+    {
+     "id": "lin-RIT-44",
+     "identifier": "RIT-44",
+     "number": 44,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 2,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-unstarted",
+      "name": "Todo",
+      "type": "unstarted"
+     },
+     "labels": {
+      "nodes": [
+       {
+        "name": "待ち:実機"
+       }
+      ]
+     },
+     "cycle": {
+      "id": "cyc-3"
+     }
+    },
+    {
+     "id": "lin-RIT-45",
+     "identifier": "RIT-45",
+     "number": 45,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 0,
+     "estimate": 2,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-unstarted",
+      "name": "Todo",
+      "type": "unstarted"
+     },
+     "labels": {
+      "nodes": [
+       {
+        "name": "待ち:局長"
+       }
+      ]
+     },
+     "cycle": {
+      "id": "cyc-3"
+     }
+    },
+    {
+     "id": "lin-RIT-46",
+     "identifier": "RIT-46",
+     "number": 46,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 3,
+     "estimate": 5,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-completed",
+      "name": "Done",
+      "type": "completed"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": {
+      "id": "cyc-3"
+     }
+    },
+    {
+     "id": "lin-RIT-47",
+     "identifier": "RIT-47",
+     "number": 47,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 3,
+     "estimate": 1,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-canceled",
+      "name": "Canceled",
+      "type": "canceled"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": {
+      "id": "cyc-3"
+     }
+    },
+    {
+     "id": "lin-RIT-49",
+     "identifier": "RIT-49",
+     "number": 49,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 1,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-unstarted",
+      "name": "Todo",
+      "type": "unstarted"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-48",
+     "identifier": "RIT-48",
+     "number": 48,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 2,
+     "estimate": null,
+     "dueDate": "2026-11-10",
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-backlog",
+      "name": "Backlog",
+      "type": "backlog"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-54",
+     "identifier": "RIT-54",
+     "number": 54,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 3,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-unstarted",
+      "name": "Todo",
+      "type": "unstarted"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-50",
+     "identifier": "RIT-50",
+     "number": 50,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 0,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-backlog",
+      "name": "Backlog",
+      "type": "backlog"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-51",
+     "identifier": "RIT-51",
+     "number": 51,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 2,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-backlog",
+      "name": "Backlog",
+      "type": "backlog"
+     },
+     "labels": {
+      "nodes": [
+       {
+        "name": "待ち:局長"
+       }
+      ]
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-52",
+     "identifier": "RIT-52",
+     "number": 52,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 3,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-triage",
+      "name": "Triage",
+      "type": "triage"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    },
+    {
+     "id": "lin-RIT-53",
+     "identifier": "RIT-53",
+     "number": 53,
+     "title": "SECRET-TITLE-XYZ",
+     "priority": 4,
+     "estimate": null,
+     "dueDate": null,
+     "updatedAt": "2026-11-01T00:00:00Z",
+     "state": {
+      "id": "st-canceled",
+      "name": "Canceled",
+      "type": "canceled"
+     },
+     "labels": {
+      "nodes": []
+     },
+     "cycle": null
+    }
+   ]
+  }
+ }
+}
