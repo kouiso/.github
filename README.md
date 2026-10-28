@@ -13,6 +13,7 @@ GitHub の既定コミュニティヘルスファイルの仕組みにより、�
 | `.github/ISSUE_TEMPLATE/bug.yml` | バグ修正・機能改修 (PBI) |
 | `.github/ISSUE_TEMPLATE/feature.yml` | 新規開発・機能改修 (PBI) |
 | `.github/ISSUE_TEMPLATE/sbi.yml` | PBI を実装単位に分解する SBI |
+| `.github/ISSUE_TEMPLATE/todo.yml` | コードを変えん作業の依頼（調べ物・設定・資料・申請） |
 | `.github/ISSUE_TEMPLATE/config.yml` | テンプレートを使わない空 Issue を無効化 |
 | `.github/pull_request_template.md` | PR の説明文 |
 
@@ -20,7 +21,7 @@ GitHub の既定コミュニティヘルスファイルの仕組みにより、�
 
 そのリポジトリに `.github/ISSUE_TEMPLATE/` を作ると、ここの Issue テンプレートは
 **1 つ残らず**使われなくなります。一部だけ差し替えることはできません。
-上書きする場合は 4 ファイルすべてを置いてください。
+上書きする場合は 5 ファイルすべてを置いてください。
 
 ## SBI の親子関係について
 
