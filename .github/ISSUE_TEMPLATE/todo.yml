@@ -1,0 +1,36 @@
+name: "作業の依頼"
+description: "調べ物・設定・資料作り・申請などシステムを変えん作業の時に使います"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        何を・どんな形で受け取りたいかが分かれば十分です。埋まってない所は、こちらから聞きます。
+
+  - type: textarea
+    id: request
+    attributes:
+      label: "何をしてほしいか（必須）"
+      description: "受け取りたい形（表・画面の写真・ファイル・URL）も書いてもらえればやり直しが減ります。"
+      placeholder: |
+        例）ドメインの更新期限を調べてほしい。期限の日付が分かる画面の写真もここに貼ってほしい。
+    validations:
+      required: true
+
+  - type: textarea
+    id: done-definition
+    attributes:
+      label: "どうなったら終わりか（必須）"
+      placeholder: |
+        - [ ] 期限の日付がこの Issue に書いてある
+        - [ ] 日付が分かる画面の写真がこの Issue にある
+    validations:
+      required: true
+
+  - type: input
+    id: due
+    attributes:
+      label: "いつまでに（任意）"
+      placeholder: "2026-11-07"
+    validations:
+      required: false
