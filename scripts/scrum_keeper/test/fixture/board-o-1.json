@@ -1,0 +1,455 @@
+{
+ "owner": "o",
+ "number": 1,
+ "project": {
+  "id": "PVT_x",
+  "title": "Board",
+  "shortDescription": "scrum-board: v1 scrum-keeper:capacity=176h count_from=2026-10-26",
+  "fields": {
+   "nodes": [
+    {
+     "id": "F_status",
+     "name": "Status",
+     "dataType": "SINGLE_SELECT",
+     "options": [
+      {
+       "id": "opt-Backlog",
+       "name": "Backlog"
+      },
+      {
+       "id": "opt-In Progress",
+       "name": "In Progress"
+      },
+      {
+       "id": "opt-In Review",
+       "name": "In Review"
+      },
+      {
+       "id": "opt-Done",
+       "name": "Done"
+      }
+     ]
+    },
+    {
+     "id": "F_prio",
+     "name": "Priority",
+     "dataType": "SINGLE_SELECT",
+     "options": [
+      {
+       "id": "opt-P0",
+       "name": "P0"
+      },
+      {
+       "id": "opt-P1",
+       "name": "P1"
+      },
+      {
+       "id": "opt-P2",
+       "name": "P2"
+      }
+     ]
+    },
+    {
+     "id": "F_wait",
+     "name": "Wait",
+     "dataType": "SINGLE_SELECT",
+     "options": [
+      {
+       "id": "opt-W1",
+       "name": "W1"
+      },
+      {
+       "id": "opt-W2",
+       "name": "W2"
+      },
+      {
+       "id": "opt-W3",
+       "name": "W3"
+      }
+     ]
+    },
+    {
+     "id": "F_est",
+     "name": "Estimate",
+     "dataType": "NUMBER"
+    },
+    {
+     "id": "F_carry",
+     "name": "Carryover",
+     "dataType": "NUMBER"
+    },
+    {
+     "id": "F_end",
+     "name": "End date",
+     "dataType": "DATE"
+    },
+    {
+     "id": "F_iter",
+     "name": "Iteration",
+     "dataType": "ITERATION",
+     "configuration": {
+      "duration": 7,
+      "iterations": [
+       {
+        "id": "it-2026-11-02",
+        "title": "Sprint 2026-11-02",
+        "startDate": "2026-11-02",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-11-09",
+        "title": "Sprint 2026-11-09",
+        "startDate": "2026-11-09",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-11-16",
+        "title": "Sprint 2026-11-16",
+        "startDate": "2026-11-16",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-11-23",
+        "title": "Sprint 2026-11-23",
+        "startDate": "2026-11-23",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-11-30",
+        "title": "Sprint 2026-11-30",
+        "startDate": "2026-11-30",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-12-07",
+        "title": "Sprint 2026-12-07",
+        "startDate": "2026-12-07",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-12-14",
+        "title": "Sprint 2026-12-14",
+        "startDate": "2026-12-14",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-12-21",
+        "title": "Sprint 2026-12-21",
+        "startDate": "2026-12-21",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-12-28",
+        "title": "Sprint 2026-12-28",
+        "startDate": "2026-12-28",
+        "duration": 7
+       }
+      ],
+      "completedIterations": [
+       {
+        "id": "it-2026-10-19",
+        "title": "Sprint 2026-10-19",
+        "startDate": "2026-10-19",
+        "duration": 7
+       },
+       {
+        "id": "it-2026-10-26",
+        "title": "Sprint 2026-10-26",
+        "startDate": "2026-10-26",
+        "duration": 7
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "items": {
+   "pageInfo": {
+    "hasNextPage": false
+   },
+   "nodes": [
+    {
+     "id": "PVTI_o/r_1",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_1",
+      "number": 1,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "OPEN",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "closedAt": null,
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "In Progress",
+        "field": {
+         "name": "Status"
+        }
+       },
+       {
+        "name": "P0",
+        "field": {
+         "name": "Priority"
+        }
+       },
+       {
+        "iterationId": "it-2026-10-26",
+        "field": {
+         "name": "Iteration"
+        }
+       },
+       {
+        "number": 8,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_2",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_2",
+      "number": 2,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "OPEN",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "closedAt": null,
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "P1",
+        "field": {
+         "name": "Priority"
+        }
+       },
+       {
+        "iterationId": "it-2026-10-26",
+        "field": {
+         "name": "Iteration"
+        }
+       },
+       {
+        "number": 4,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_3",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_3",
+      "number": 3,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "CLOSED",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "closedAt": "2026-10-29T03:00:00Z",
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "Done",
+        "field": {
+         "name": "Status"
+        }
+       },
+       {
+        "iterationId": "it-2026-10-26",
+        "field": {
+         "name": "Iteration"
+        }
+       },
+       {
+        "number": 3,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_4",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_4",
+      "number": 4,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "OPEN",
+      "updatedAt": "2026-10-20T00:00:00Z",
+      "closedAt": null,
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "P1",
+        "field": {
+         "name": "Priority"
+        }
+       },
+       {
+        "name": "W1",
+        "field": {
+         "name": "Wait"
+        }
+       },
+       {
+        "iterationId": "it-2026-11-02",
+        "field": {
+         "name": "Iteration"
+        }
+       },
+       {
+        "number": 6,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_5",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_5",
+      "number": 5,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "OPEN",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "closedAt": null,
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "P2",
+        "field": {
+         "name": "Priority"
+        }
+       },
+       {
+        "iterationId": "it-2026-11-09",
+        "field": {
+         "name": "Iteration"
+        }
+       },
+       {
+        "number": 2,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_6",
+     "type": "ISSUE",
+     "content": {
+      "__typename": "Issue",
+      "id": "I_o/r_6",
+      "number": 6,
+      "title": "SECRET-TITLE-XYZ",
+      "state": "OPEN",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "closedAt": null,
+      "repository": {
+       "nameWithOwner": "o/r"
+      },
+      "parent": null,
+      "subIssues": {
+       "nodes": []
+      }
+     },
+     "fieldValues": {
+      "nodes": [
+       {
+        "name": "P1",
+        "field": {
+         "name": "Priority"
+        }
+       },
+       {
+        "number": 5,
+        "field": {
+         "name": "Estimate"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "id": "PVTI_o/r_7",
+     "type": "PULLREQUEST",
+     "content": {
+      "__typename": "PullRequest",
+      "number": 7,
+      "title": "SECRET-TITLE-XYZ"
+     },
+     "fieldValues": {
+      "nodes": []
+     }
+    },
+    {
+     "id": "PVTI_o/r_8",
+     "type": "DRAFTISSUE",
+     "content": {
+      "__typename": "DraftIssue",
+      "title": "SECRET-TITLE-XYZ"
+     },
+     "fieldValues": {
+      "nodes": []
+     }
+    }
+   ]
+  }
+ }
+}

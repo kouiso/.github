@@ -1,0 +1,19 @@
+{
+ "repos": {
+  "o/r": {
+   "yml": "owner: o\nproject_number: 1\n",
+   "issues": [
+    [
+     6,
+     "o/r|6",
+     "Issue"
+    ],
+    [
+     9,
+     "o/r|9",
+     "Issue"
+    ]
+   ]
+  }
+ }
+}
