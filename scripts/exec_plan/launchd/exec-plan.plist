@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 雛形。__LABEL__ と __HOME__ は入れる時に差し替える。launchctl bootstrap gui/$(id -u) <このファイル> -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/.local/bin/exec-plan-run.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__HOME__/.claude/plans/exec/out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.claude/plans/exec/err.log</string>
+</dict>
+</plist>
