@@ -47,7 +47,9 @@ LINEAR_PRIORITY = {1: "P0", 2: "P1", 3: "P2", 4: "P3"}
 RATE_FLOOR = 1500
 RATE_BASE = 1360
 RATE_PER_HOUR = 4
-RATE_BUDGET = 2500
+# 実盤 1 枚で cost 700 程度（hm 盤は約 725）。15 分周期の 4 回/時で 2900 点/時。
+# GitHub の上限 5000 点/時から床 1500 を引いた残量に合わせるため 5000 に置く。
+RATE_BUDGET = 5000
 REST_MAX = 500
 
 # 項目の名前の既定。repo の .github/scrum-board.yml の fields: で上書きできる（付録 2A）。
