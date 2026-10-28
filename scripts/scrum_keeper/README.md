@@ -49,6 +49,35 @@ python3 scripts/scrum_keeper/scrum_keeper.py (--board <owner>/<番号> | --allow
 4 書き込みの上限かロック待ちで中断 / 5 gh の認証切れ / 6 HALT を書いて中断 / 9 入口の固定 commit 違い（`launchd/` の入口が返す）。
 `last-run` は、`--job all` が書き込みも含めて最後まで成功した時だけ更新します。
 
+## Linear（チーム RIT）の読み取り: `linear_sweep.py`
+
+Linear には**何も書きません**。繰り越しは Linear 自身（Cycles）がやるので、この入口の仕事は読みと記録だけです
+（S17: Linear 版のおかわりと見込み無し）。
+
+- 今の Cycle（`team.activeCycle`）の終わっていない課題で、Estimate 無し・Priority 無しを拾い、台帳に 1 行足します。
+- 今の Cycle にやれる物（`待ち:` ラベル無し）が 0 の時だけ、Cycle 未所属の課題を優先度の順（Urgent→P0、High→P1、
+  Medium→P2。`待ち:` と triage は除く）に「進める候補」として出します — Linear 版おかわり。提案だけで、
+  Cycle に入れる操作はしません。
+- 鍵は `--key-ref`（既定 `op://RITMO/Linear API key - scrum-keeper/credential`）を実行の時だけ `op read` で読み、
+  値はファイルにもログにも残しません。`op` が無い・参照が無い・Linear に届かない・schema の名が違う時は
+  終了コード 6 でその回を諦めます（GitHub 側の回は別プロセスなので影響しません）。
+- フィールド名は未試験なので、読む前に `__type` で `Team`/`Cycle`/`Issue`/`WorkflowState` の要る名前を確かめます。
+- 台帳は同じ `<ledger>/K.jsonl` に `step=keeper-linear`・`target=linear/<key>` の done を 1 行。identifier
+  （`RIT-43` など）の一覧と件数だけを持ち、題名は出しません。
+
+```
+python3 scripts/scrum_keeper/linear_sweep.py [--team RIT] [--key-ref 'op://...'] \
+    [--now <ISO8601>] [--dry-run] [--fixture <ディレクトリ>] [--halt-file <パス>] \
+    --ledger-dir <ディレクトリ> [--state-dir <ディレクトリ>] [--max-suggest 20]
+```
+
+- `--dry-run` は台帳にも書かず、拾った物を CSV（`scrum_keeper.py` と同じ列）で標準出力に出します。
+- `--fixture` は `linear` キーを持つ JSON を置いたディレクトリ（見本 `test/fixture/linear-rit.json`。
+  `python3 scripts/scrum_keeper/test/make_fixture.py` で作り直せます）。`op` も Linear も触りません。
+
+終了コード: 0 正常（HALT・二重起動も 0）/ 1 Linear の応答の誤り / 2 引数 / 4 台帳の鍵待ちで中断 /
+6 Linear に届かん・HALT を書いて中断。
+
 ## 守っていること
 
 - HALT の印があれば何も書かず 0 で終わる。回の途中で置かれた HALT も、次の書き込みの前に見て止まる。

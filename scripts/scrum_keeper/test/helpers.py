@@ -3,6 +3,8 @@ import datetime as dt
 import json
 
 from scrum_keeper.github_client import FakeClient, parse_board
+from scrum_keeper.linear_client import REQUIRED_FIELDS, RIT_TEAM_ID, FakeLinearClient
+from scrum_keeper.linear_sweep import main as linear_main
 from scrum_keeper.scrum_keeper import main
 
 D = dt.date
@@ -116,3 +118,40 @@ def week(client, ref, n, repo="o/r"):
     b = client.boards[ref]
     it = b.iteration_by_id(item(client, ref, n, repo).iteration_id)
     return it.start.isoformat() if it else None
+
+
+# ------------------------------------------------------------------ Linear 用の部品
+STATE_NAMES = {"triage": "Triage", "backlog": "Backlog", "unstarted": "Todo", "started": "In Progress",
+               "completed": "Done", "canceled": "Canceled"}
+
+
+def raw_linear_issue(n, team="RIT", priority=0, estimate=None, due=None, state_type="started",
+                     labels=(), cycle=None, updated="2026-11-01T00:00:00Z"):
+    """Linear の Issue ノード。priority: 0 無し / 1 Urgent / 2 High / 3 Medium / 4 Low。"""
+    return {"id": f"lin-{team}-{n}", "identifier": f"{team}-{n}", "number": n, "title": TITLE,
+            "priority": priority, "estimate": estimate, "dueDate": due, "updatedAt": updated,
+            "state": {"id": f"st-{state_type}", "name": STATE_NAMES[state_type], "type": state_type},
+            "labels": {"nodes": [{"name": x} for x in labels]},
+            "cycle": {"id": cycle} if cycle else None}
+
+
+def linear_fixture(cycle_issues=(), team_issues=(), team="RIT", types=None, no_cycle=False):
+    """--fixture と FakeLinearClient の元になる dict。types を欠かせば schema の確かめが落ちる。"""
+    types = types if types is not None else {t: sorted(v) + ["createdAt"] for t, v in REQUIRED_FIELDS.items()}
+    cycle = None if no_cycle else {"id": "cyc-3", "number": 3, "name": "Cycle 3",
+                                   "startsAt": "2026-11-02T00:00:00Z", "endsAt": "2026-11-09T00:00:00Z",
+                                   "issues": list(cycle_issues)}
+    return {"linear": {"types": types, "teams": [{"id": RIT_TEAM_ID, "key": team, "name": team}],
+                       "activeCycles": {team: cycle}, "issues": {team: list(team_issues)}}}
+
+
+def make_linear_client(data):
+    lin = data["linear"]
+    return FakeLinearClient(lin.get("types"), lin.get("teams"), lin.get("activeCycles"), lin.get("issues"))
+
+
+def run_linear(tmp_path, client, *extra, team="RIT", now=NOW_WED):
+    args = ["--team", team, "--now", now, "--ledger-dir", str(tmp_path / "ledger"),
+            "--state-dir", str(tmp_path / "state"), "--halt-file", str(tmp_path / "ledger" / "HALT"),
+            *extra]
+    return linear_main(args, client=client)
