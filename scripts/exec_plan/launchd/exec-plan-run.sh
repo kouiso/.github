@@ -1,5 +1,5 @@
 #!/bin/bash
-# launchd の入口（15 分ごと）。~/.local/bin/exec-plan-run.sh に置く。
+# launchd の入口（30 分ごと）。~/.local/bin/exec-plan-run.sh に置く。
 # 公開 repo に置く雛形なので、持ち主ごとの値（__HOME__・__LEDGER_DIR__・__HALT_FILE__・__LINEAR_KEY_REF__）は入れる時に差し替える。
 # 決まりは plan/05 付録 2D: TZ=Asia/Tokyo で判断し、force-once か EXEC_PLAN_MANUAL=1 は時刻の決まりを飛ばす。
 set -u
