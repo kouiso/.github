@@ -43,12 +43,13 @@ LINEAR_API = "https://api.linear.app/graphql"
 LINEAR_DEFAULT_REPO = "kouiso/character-chat"
 LINEAR_PRIORITY = {1: "P0", 2: "P1", 3: "P2", 4: "P3"}
 
-# 量の決まり（plan/05 付録 2A）。残りが床未満なら rc 8、出来た回も 1360 + 4×cost <= 2500。
+# 量の決まり（plan/05 付録 2A）。残りが床未満なら rc 8、出来た回も 1360 + 2×cost <= 2500。
 RATE_FLOOR = 1500
 RATE_BASE = 1360
-RATE_PER_HOUR = 4
-# 実盤 1 枚の cost は読み取り方で変わる。1360 + 4×cost が 2500 に収まらん時は
-# launchd の周期を 30 分に下げて RATE_PER_HOUR=2 にする（要: plist の StartInterval）。
+# launchd の周期は 30 分（plist StartInterval 1800）。実測 cost=540 では
+# 15 分周期（1360 + 4×540 = 3520）が 2500 を超えるため下げた。cost が 285 以下に
+# 戻れば 15 分へ戻せる（1360 + 4×285 = 2500）。
+RATE_PER_HOUR = 2
 RATE_BUDGET = 2500
 REST_MAX = 500
 
@@ -142,14 +143,15 @@ BOARD_META_Q = """query($login:String!,$n:Int!){repositoryOwner(login:$login){..
 }}
  rateLimit{cost remaining}}"""
 
-# 使ってへん field（body・updatedAt・closedAt・content.id）は取らん。subIssues は
+# 使ってへん field（updatedAt・closedAt・content.id）は取らん。body は本文中の
+# blocked 参照（body_refs → deps）が要るので残す。subIssues は
 # 「子が居るか」の判定だけに使うので first:1 で足りる。
 # items の query 引数は盤の絞り込み構文（iteration:@current 等）をそのまま受ける。
 # Sprint の対象は今週の行だけやから全件ページングをやめて query で絞る。
 BOARD_ITEMS_Q = """query($login:String!,$n:Int!,$after:String,$q:String){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$n){
  items(first:100,after:$after,query:$q){pageInfo{hasNextPage endCursor} nodes{id type
   content{__typename
-   ... on Issue{number title url state createdAt repository{nameWithOwner}
+   ... on Issue{number title url state createdAt body repository{nameWithOwner}
      parent{number repository{nameWithOwner}}
      subIssues(first:1){nodes{number repository{nameWithOwner}}}
      blockedBy(first:20){nodes{number state repository{nameWithOwner}}}

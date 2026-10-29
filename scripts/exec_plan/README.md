@@ -43,7 +43,7 @@ python3 "$WT/scripts/exec_plan/exec_plan_from_boards.py" --iteration current \
 6 Linear だけ不可 / 7 `--fill-empty` 途中停止 / 8 量不足。3, 4, 8 の時は前のプランが残ります。
 
 量の決まり: 開始前に `rateLimit.remaining` が 1,500 未満なら rc 8。作り終えて
-`1,360 + 4 × graphql_cost > 2,500` か `rest_calls > 500` なら rc 8（4 = 15 分ごとに起きるので
+`1,360 + 2 × graphql_cost > 2,500` か `rest_calls > 500` なら rc 8（2 = 30 分ごとに起きるので
 1 時間に作れる最大の回数）。
 
 ## 出力
@@ -75,9 +75,9 @@ python3 "$WT/scripts/exec_plan/exec_plan_from_boards.py" --iteration current \
 
 `launchd/exec-plan-run.sh` を `~/.local/bin/exec-plan-run.sh` に、`launchd/exec-plan.plist` を
 `~/Library/LaunchAgents/jp.ritmo.exec-plan.plist` に写して、プレースホルダ（`__HOME__`・`__LEDGER_DIR__`・
-`__HALT_FILE__`・`__LINEAR_KEY_REF__`・`__LABEL__`）を差し替えます。`StartInterval` 900、`RunAtLoad`。
+`__HALT_FILE__`・`__LINEAR_KEY_REF__`・`__LABEL__`）を差し替えます。`StartInterval` 1800、`RunAtLoad`。
 
-- 15 分ごとに起きて日本時間で決める: `force-once` か `EXEC_PLAN_MANUAL=1` は時刻の決まりを飛ばす ／
+- 30 分ごとに起きて日本時間で決める: `force-once` か `EXEC_PLAN_MANUAL=1` は時刻の決まりを飛ばす ／
   今日 < `m2-date` か 8:31 前は作らん ／ `fail-state` が 3 回か最後の失敗から 60 分未満は作らん ／
   `last-built` が今日 8:31 前なら作る ／ 台帳に前に作った後の `keeper-carryover|stalled|okawari` の done が
   あれば作る（台帳が読めんなら 60 分ごと）。
