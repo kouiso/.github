@@ -6,8 +6,9 @@ scrum-keeper が週の整理をした後の盤を**読むだけ**で、月曜の
 
 ## 何をするか
 
-- `--allow` の 1 行 `owner/番号`（`_` で始まる行は読まない）の全部の Project から、`fields` と `items(first:100)` を
-  全ページ読みます（課題の本文・`blockedBy`・親子・`fieldValues` まで）。今の Sprint は日本時間の日付で決めます。
+- `--allow` の 1 行 `owner/番号`（`_` で始まる行は読まない）の全部の Project から、項目定義を 1 回、対象週の行を
+  全ページ読みます（課題の本文・`blockedBy`・親子・`fieldValues` まで）。対象週は日本時間か `--now` で決めます。
+  項目定義の週名で絞り、項目名が単純な英数字・ハイフン・下線でない場合や週が見つからない場合は全件読みます。
 - 今の Sprint の開いとる課題を 3 つに分けます: 待ち無し＝作業一覧 ／ Wait=実機＝実機一覧 ／ 局長・外部待ち＝数だけ。
   PR・下書きは数だけ、閉じた物は数えません。
 - 先の物（`blockedBy` と本文の `Blocked by`/`Depends on`/`先に` の後の参照。コードの中は読まない）は、
@@ -45,6 +46,15 @@ python3 "$WT/scripts/exec_plan/exec_plan_from_boards.py" --iteration current \
 量の決まり: 開始前に `rateLimit.remaining` が 1,500 未満なら rc 8。作り終えて
 `1,360 + 2 × graphql_cost > 2,500` か `rest_calls > 500` なら rc 8（2 = 30 分ごとに起きるので
 1 時間に作れる最大の回数）。
+
+## ローカル検証
+
+```sh
+python3 -m pip install pytest==8.3.5 graphql-core==3.2.6
+python3 -m pytest scripts/exec_plan/test_exec_plan.py scripts/scrum_keeper/test -q
+```
+
+通信を差し替え、日付指定・週の絞り込み・本文の依存先・盤全体の件数と、失敗時に前の出力が残ることを確認します。
 
 ## 出力
 
@@ -99,7 +109,7 @@ python3 "$WT/scripts/exec_plan/exec_plan_from_boards.py" --iteration current \
 ## 分かっている限界
 
 - Linear の項目名は `__type` で合わせてから読むが、実物では未試験（Cycle が無い時は `linear:no-active-cycle`）。
-- 本文の参照の向き先が開いとるかは、盤に載っとる物だけ分かる。載っとらん物は開いとると見なして `deps_open` に入れ、
-  `deps-not-in-sprint` を付ける。
+- 取得した行に無い依存先は最大 30 件まで状態を個別に読みます。読めない物と上限を超えた物は開いとると見なして
+  `deps_open` に入れ、`deps-not-in-sprint` を付けます。
 - 同じ課題が複数の Project の今週に居る時は、先に当たった盤の行だけが残る（`dup-on-boards`）。
 - `Estimate` が無い行の設計判定は `Size`（XL→R2、L→R5）で代用する。

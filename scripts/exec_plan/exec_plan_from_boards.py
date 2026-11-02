@@ -135,6 +135,8 @@ def op_path() -> str | None:
 # ページに fields を畳んで取ると ページ数 × 項目定義 が cost に重なって乗る。
 BOARD_META_Q = """query($login:String!,$n:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$n){
  id title
+ prs:items(first:1,query:"is:pr"){totalCount}
+ drafts:items(first:1,query:"is:draft -is:pr"){totalCount}
  fields(first:50){nodes{
   ... on ProjectV2FieldCommon{id name dataType}
   ... on ProjectV2SingleSelectField{options{id name}}
@@ -245,6 +247,8 @@ class Board:
     field_options: dict = field(default_factory=dict)      # 項目名 -> {選択肢名: id}
     iteration_starts: dict = field(default_factory=dict)   # iteration id -> start date
     items: list = field(default_factory=list)              # Work
+    pr_count: int | None = None
+    draft_count: int | None = None
 
     @property
     def ref(self) -> str:
@@ -384,6 +388,8 @@ def dep_stub(key: str, repo: str, number: int, state: str | None) -> Work:
 
 def parse_board(node: dict, owner: str, number: int, item_nodes: list) -> Board:
     b = Board(owner=owner, number=number, project_id=node["id"], title=node.get("title") or "")
+    b.pr_count = (node.get("prs") or {}).get("totalCount")
+    b.draft_count = (node.get("drafts") or {}).get("totalCount")
     for f in (node.get("fields") or {}).get("nodes") or []:
         if not f or "name" not in f:
             continue
@@ -461,11 +467,20 @@ class GhShell:
         if self.remaining is not None and self.remaining < RATE_FLOOR:
             raise GhRateLimit(f"remaining {self.remaining} < {RATE_FLOOR}")
 
-    def read_board(self, owner: str, number: int, item_query: str | None) -> Board:
+    def read_board(self, owner: str, number: int, monday: dt.date) -> Board:
         d = self._gql(BOARD_META_Q, login=owner, n=number)
         node = ((d.get("data") or {}).get("repositoryOwner") or {}).get("projectV2")
         if not node:
             raise ProjectMiss(f"board {owner}/{number} not found")
+        item_query = None
+        fields = [f for f in (node.get("fields") or {}).get("nodes") or []
+                  if f and f.get("configuration")]
+        if len(fields) == 1 and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", fields[0]["name"]):
+            cfg = fields[0]["configuration"]
+            for it in (cfg.get("completedIterations") or []) + (cfg.get("iterations") or []):
+                if it.get("startDate") == monday.isoformat() and it.get("title"):
+                    item_query = fields[0]["name"].lower() + ":" + json.dumps(it["title"], ensure_ascii=False)
+                    break
         item_nodes, after = [], None
         while True:
             d = self._gql(BOARD_ITEMS_Q, login=owner, n=number, after=after, q=item_query)
@@ -732,7 +747,7 @@ class FixtureShell(GhShell):
     def probe_budget(self) -> None:
         return
 
-    def read_board(self, owner: str, number: int, item_query: str | None) -> Board:
+    def read_board(self, owner: str, number: int, monday: dt.date) -> Board:
         node = self.boards.get(f"{owner}/{number}")
         if node is None:
             raise ProjectMiss(f"board {owner}/{number} not found")
@@ -971,15 +986,12 @@ def main(argv=None) -> int:
         log(f"github unreachable: {e}")
         return 3
 
-    # Sprint の対象は今週（next は来週）の行だけ。日付指定は試験用で全件読む。
-    item_query = {"current": "iteration:@current",
-                  "next": "iteration:@next"}.get(args.iteration)
-
     # ---- 盤を全部読む。1 つでも読めん所があれば前のプランを残して rc 4 ----
     boards, misses = [], []
     for ref in refs:
         try:
-            b = shell.read_board(*split_ref(ref), item_query)
+            owner, number = split_ref(ref)
+            b = shell.read_board(owner, number, monday)
             if args.allow and b.title.startswith("_"):
                 continue
             boards.append(b)
@@ -1188,6 +1200,10 @@ def main(argv=None) -> int:
                 c["pr"] += 1
             elif w.part == "draft":
                 c["draft"] += 1
+        if b.pr_count is not None:
+            c["pr"] = b.pr_count
+        if b.draft_count is not None:
+            c["draft"] = b.draft_count
         c["fill_targets"] = sum(1 for w in plan_works if w.board == b.ref and w.fill_target)
         board_counts[b.ref] = c
     fill_targets = sum(c["fill_targets"] for c in board_counts.values())
