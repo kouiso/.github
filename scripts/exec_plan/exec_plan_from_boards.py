@@ -43,13 +43,14 @@ LINEAR_API = "https://api.linear.app/graphql"
 LINEAR_DEFAULT_REPO = "kouiso/character-chat"
 LINEAR_PRIORITY = {1: "P0", 2: "P1", 3: "P2", 4: "P3"}
 
-# 量の決まり（plan/05 付録 2A）。残りが床未満なら rc 8、出来た回も 1360 + 4×cost <= 2500。
+# 量の決まり（plan/05 付録 2A）。残りが床未満なら rc 8、出来た回も 1360 + 2×cost <= 2500。
 RATE_FLOOR = 1500
 RATE_BASE = 1360
-RATE_PER_HOUR = 4
-# 実盤 1 枚で cost 700 程度（hm 盤は約 725）。15 分周期の 4 回/時で 2900 点/時。
-# GitHub の上限 5000 点/時から床 1500 を引いた残量に合わせるため 5000 に置く。
-RATE_BUDGET = 5000
+# launchd の周期は 30 分（plist StartInterval 1800）。実測 cost=540 では
+# 15 分周期（1360 + 4×540 = 3520）が 2500 を超えるため下げた。cost が 285 以下に
+# 戻れば 15 分へ戻せる（1360 + 4×285 = 2500）。
+RATE_PER_HOUR = 2
+RATE_BUDGET = 2500
 REST_MAX = 500
 
 # 項目の名前の既定。repo の .github/scrum-board.yml の fields: で上書きできる（付録 2A）。
@@ -130,19 +131,31 @@ def op_path() -> str | None:
 
 
 # ------------------------------------------------------------------ 読み取りの形
-BOARD_Q = """query($login:String!,$n:Int!,$after:String){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$n){
+# 盤の項目定義は items のページをまたいで変わらんので 1 回だけ読む。items の各
+# ページに fields を畳んで取ると ページ数 × 項目定義 が cost に重なって乗る。
+BOARD_META_Q = """query($login:String!,$n:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$n){
  id title
+ prs:items(first:1,query:"is:pr"){totalCount}
+ drafts:items(first:1,query:"is:draft -is:pr"){totalCount}
  fields(first:50){nodes{
   ... on ProjectV2FieldCommon{id name dataType}
   ... on ProjectV2SingleSelectField{options{id name}}
   ... on ProjectV2IterationField{configuration{duration
-    iterations{id title startDate duration} completedIterations{id title startDate duration}}}}}
- items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id type
+    iterations{id title startDate duration} completedIterations{id title startDate duration}}}}}}
+}}
+ rateLimit{cost remaining}}"""
+
+# 使ってへん field（updatedAt・closedAt・content.id）は取らん。body は本文中の
+# blocked 参照（body_refs → deps）が要るので残す。subIssues は
+# 「子が居るか」の判定だけに使うので first:1 で足りる。
+# items の query 引数は盤の絞り込み構文（iteration:@current 等）をそのまま受ける。
+# Sprint の対象は今週の行だけやから全件ページングをやめて query で絞る。
+BOARD_ITEMS_Q = """query($login:String!,$n:Int!,$after:String,$q:String){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$n){
+ items(first:100,after:$after,query:$q){pageInfo{hasNextPage endCursor} nodes{id type
   content{__typename
-   ... on Issue{id number title url state createdAt updatedAt closedAt repository{nameWithOwner}
-     body
+   ... on Issue{number title url state createdAt body repository{nameWithOwner}
      parent{number repository{nameWithOwner}}
-     subIssues(first:50){nodes{number repository{nameWithOwner}}}
+     subIssues(first:1){nodes{number repository{nameWithOwner}}}
      blockedBy(first:20){nodes{number state repository{nameWithOwner}}}
      closedByPullRequestsReferences(first:10,userLinkedOnly:false){nodes{number state repository{nameWithOwner}}}}
    ... on PullRequest{number repository{nameWithOwner}}
@@ -234,6 +247,8 @@ class Board:
     field_options: dict = field(default_factory=dict)      # 項目名 -> {選択肢名: id}
     iteration_starts: dict = field(default_factory=dict)   # iteration id -> start date
     items: list = field(default_factory=list)              # Work
+    pr_count: int | None = None
+    draft_count: int | None = None
 
     @property
     def ref(self) -> str:
@@ -366,8 +381,15 @@ def resolve_fields(w: Work, fmap: dict) -> None:
     w.worker_field = name("assignee")
 
 
+def dep_stub(key: str, repo: str, number: int, state: str | None, kind: str = "Issue") -> Work:
+    """盤の外の依存先の見立て。状態が取れん時は開いとる扱い（従来どおり）。"""
+    return Work(key=key, repo=repo, number=number, kind=kind, state=state or "OPEN")
+
+
 def parse_board(node: dict, owner: str, number: int, item_nodes: list) -> Board:
     b = Board(owner=owner, number=number, project_id=node["id"], title=node.get("title") or "")
+    b.pr_count = (node.get("prs") or {}).get("totalCount")
+    b.draft_count = (node.get("drafts") or {}).get("totalCount")
     for f in (node.get("fields") or {}).get("nodes") or []:
         if not f or "name" not in f:
             continue
@@ -445,19 +467,45 @@ class GhShell:
         if self.remaining is not None and self.remaining < RATE_FLOOR:
             raise GhRateLimit(f"remaining {self.remaining} < {RATE_FLOOR}")
 
-    def read_board(self, owner: str, number: int) -> Board:
-        item_nodes, after, node = [], None, None
+    def read_board(self, owner: str, number: int, monday: dt.date) -> Board:
+        d = self._gql(BOARD_META_Q, login=owner, n=number)
+        node = ((d.get("data") or {}).get("repositoryOwner") or {}).get("projectV2")
+        if not node:
+            raise ProjectMiss(f"board {owner}/{number} not found")
+        item_query = None
+        fields = [f for f in (node.get("fields") or {}).get("nodes") or []
+                  if f and f.get("configuration")]
+        if len(fields) == 1 and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", fields[0]["name"]):
+            cfg = fields[0]["configuration"]
+            for it in (cfg.get("completedIterations") or []) + (cfg.get("iterations") or []):
+                if it.get("startDate") == monday.isoformat() and it.get("title"):
+                    item_query = fields[0]["name"].lower() + ":" + json.dumps(it["title"], ensure_ascii=False)
+                    break
+        item_nodes, after = [], None
         while True:
-            d = self._gql(BOARD_Q, login=owner, n=number, after=after)
+            d = self._gql(BOARD_ITEMS_Q, login=owner, n=number, after=after, q=item_query)
             proj = ((d.get("data") or {}).get("repositoryOwner") or {}).get("projectV2")
             if not proj:
                 raise ProjectMiss(f"board {owner}/{number} not found")
-            node = node or proj
             item_nodes += proj["items"]["nodes"]
             if not proj["items"]["pageInfo"]["hasNextPage"]:
                 break
             after = proj["items"]["pageInfo"]["endCursor"]
         return parse_board(node, owner, number, item_nodes)
+
+    def dep_state(self, repo: str, number: int) -> tuple:
+        """Read a dependency's repository, number, state and resource type."""
+        self.rest_calls += 1
+        p = subprocess.run([gh_path(), "api", f"repos/{repo}/issues/{number}",
+                            "--jq", '{state, is_pr: has("pull_request")}'],
+                           capture_output=True, text=True)
+        try:
+            data = json.loads(p.stdout) if p.returncode == 0 else {}
+        except ValueError:
+            data = {}
+        st = (data.get("state") or "").upper()
+        return (repo, number, st if st in ("OPEN", "CLOSED") else None,
+                "PullRequest" if data.get("is_pr") else "Issue")
 
     def rest_yml(self, repo: str) -> tuple:
         """repo の .github/scrum-board.yml。返り値は ("ok", 本文) / ("404", None)。"""
@@ -705,11 +753,14 @@ class FixtureShell(GhShell):
     def probe_budget(self) -> None:
         return
 
-    def read_board(self, owner: str, number: int) -> Board:
+    def read_board(self, owner: str, number: int, monday: dt.date) -> Board:
         node = self.boards.get(f"{owner}/{number}")
         if node is None:
             raise ProjectMiss(f"board {owner}/{number} not found")
         return parse_board(node, owner, number, node["items"]["nodes"])
+
+    def dep_state(self, repo: str, number: int) -> tuple:
+        return (repo, number, None)
 
     def rest_yml(self, repo: str):
         if repo in self.yml_cache:
@@ -945,7 +996,8 @@ def main(argv=None) -> int:
     boards, misses = [], []
     for ref in refs:
         try:
-            b = shell.read_board(*split_ref(ref))
+            owner, number = split_ref(ref)
+            b = shell.read_board(owner, number, monday)
             if args.allow and b.title.startswith("_"):
                 continue
             boards.append(b)
@@ -1071,6 +1123,14 @@ def main(argv=None) -> int:
              for p in ("work", "device")}
     # 閉じた物は数えん。盤に載っとる物は状態で、載っとらん物は開いとると見なす。
     all_items = {w.key: w for b in boards for w in b.items}
+    # 今週の行だけ読むので Sprint 外の依存先は拾えてへん。閉じた依存先を「未消化」
+    # と誤記せんよう、拾えてへん repo#番号 は個別に状態だけ確かめる（上限 30 件）。
+    missing_deps = {dkey for b in boards for w in b.items if w.part in ("work", "device")
+                    for dkey in w.deps if dkey not in all_items}
+    for dkey in sorted(missing_deps)[:30]:
+        m = REF_FULL_RE.fullmatch(dkey)
+        if m:
+            all_items[dkey] = dep_stub(dkey, *shell.dep_state(m.group(1), int(m.group(2))))
     for w in [w for b in boards for w in b.items if w.part in ("work", "device")]:
         for dkey in w.deps:
             target = all_items.get(dkey)
@@ -1146,6 +1206,10 @@ def main(argv=None) -> int:
                 c["pr"] += 1
             elif w.part == "draft":
                 c["draft"] += 1
+        if b.pr_count is not None:
+            c["pr"] = b.pr_count
+        if b.draft_count is not None:
+            c["draft"] = b.draft_count
         c["fill_targets"] = sum(1 for w in plan_works if w.board == b.ref and w.fill_target)
         board_counts[b.ref] = c
     fill_targets = sum(c["fill_targets"] for c in board_counts.values())

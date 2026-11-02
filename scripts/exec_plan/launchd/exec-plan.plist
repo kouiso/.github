@@ -11,7 +11,7 @@
     <string>__HOME__/.local/bin/exec-plan-run.sh</string>
   </array>
   <key>StartInterval</key>
-  <integer>900</integer>
+  <integer>1800</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
