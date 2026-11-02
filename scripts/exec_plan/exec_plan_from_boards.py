@@ -381,9 +381,9 @@ def resolve_fields(w: Work, fmap: dict) -> None:
     w.worker_field = name("assignee")
 
 
-def dep_stub(key: str, repo: str, number: int, state: str | None) -> Work:
+def dep_stub(key: str, repo: str, number: int, state: str | None, kind: str = "Issue") -> Work:
     """盤の外の依存先の見立て。状態が取れん時は開いとる扱い（従来どおり）。"""
-    return Work(key=key, repo=repo, number=number, kind="Issue", state=state or "OPEN")
+    return Work(key=key, repo=repo, number=number, kind=kind, state=state or "OPEN")
 
 
 def parse_board(node: dict, owner: str, number: int, item_nodes: list) -> Board:
@@ -494,12 +494,18 @@ class GhShell:
         return parse_board(node, owner, number, item_nodes)
 
     def dep_state(self, repo: str, number: int) -> tuple:
-        """盤の外の依存先の repo・番号・状態。取れん時は ("",repo,number,None)。"""
+        """Read a dependency's repository, number, state and resource type."""
         self.rest_calls += 1
         p = subprocess.run([gh_path(), "api", f"repos/{repo}/issues/{number}",
-                            "--jq", ".state"], capture_output=True, text=True)
-        st = p.stdout.strip().upper() if p.returncode == 0 else ""
-        return (repo, number, st if st in ("OPEN", "CLOSED") else None)
+                            "--jq", '{state, is_pr: has("pull_request")}'],
+                           capture_output=True, text=True)
+        try:
+            data = json.loads(p.stdout) if p.returncode == 0 else {}
+        except ValueError:
+            data = {}
+        st = (data.get("state") or "").upper()
+        return (repo, number, st if st in ("OPEN", "CLOSED") else None,
+                "PullRequest" if data.get("is_pr") else "Issue")
 
     def rest_yml(self, repo: str) -> tuple:
         """repo の .github/scrum-board.yml。返り値は ("ok", 本文) / ("404", None)。"""

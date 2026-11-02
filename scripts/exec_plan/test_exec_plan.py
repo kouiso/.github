@@ -164,6 +164,40 @@ def test_budget_failure_preserves_existing_plan(monkeypatch, tmp_path):
     assert previous.read_text() == "previous plan"
 
 
+@pytest.mark.parametrize("payload,kind", [
+    ({"state": "open", "is_pr": False}, "Issue"),
+    ({"state": "open", "is_pr": True}, "PullRequest"),
+])
+def test_rest_dependency_lookup_preserves_resource_type(monkeypatch, payload, kind):
+    shell = ep.GhShell()
+    monkeypatch.setattr(ep.subprocess, "run", lambda *args, **kwargs:
+                        ep.subprocess.CompletedProcess([], 0, json.dumps(payload), ""))
+    work = ep.dep_stub(f"{REPO}#10", *shell.dep_state(REPO, 10))
+    assert work.kind == kind
+    assert work.state == "OPEN"
+
+
+def test_unavailable_dependency_remains_conservatively_open(monkeypatch):
+    shell = ep.GhShell()
+    monkeypatch.setattr(ep.subprocess, "run", lambda *args, **kwargs:
+                        ep.subprocess.CompletedProcess([], 1, "", "not found"))
+    work = ep.dep_stub(f"{REPO}#10", *shell.dep_state(REPO, 10))
+    assert work.kind == "Issue"
+    assert work.state == "OPEN"
+
+
+def test_filtered_out_pull_request_is_not_an_issue_dependency(monkeypatch, tmp_path):
+    shell = Shell(pages=[item(body="Depends on #10")])
+    monkeypatch.setattr(shell, "dep_state", lambda repo, n: (repo, n, "OPEN", "PullRequest"))
+    monkeypatch.setattr(ep, "GhShell", lambda: shell)
+    assert ep.main(["--board", "example/1", "--out", str(tmp_path),
+                    "--halt-file", str(tmp_path / "HALT"),
+                    "--now", "2026-10-28T00:00:00Z"]) == 0
+    row = json.loads((tmp_path / "2026-10-26.json").read_text())["rows"][0]
+    assert row["deps_open"] == []
+    assert "deps-not-in-sprint" not in row["marks"]
+
+
 def test_fixture_retains_legacy_counts(tmp_path):
     node = project()
     del node["prs"], node["drafts"]
