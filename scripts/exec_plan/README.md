@@ -87,6 +87,16 @@ python3 -m pytest scripts/exec_plan/test_exec_plan.py scripts/scrum_keeper/test 
 `~/Library/LaunchAgents/jp.ritmo.exec-plan.plist` に写して、プレースホルダ（`__HOME__`・`__LEDGER_DIR__`・
 `__HALT_FILE__`・`__LINEAR_KEY_REF__`・`__LABEL__`）を差し替えます。`StartInterval` 1800、`RunAtLoad`。
 
+For an existing installation, reload the job after replacing the plist;
+copying it alone leaves the old interval loaded. In the logged-in user's GUI session:
+
+```sh
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/jp.ritmo.exec-plan.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/jp.ritmo.exec-plan.plist"
+```
+
+For a first installation, run only `bootstrap`.
+
 - 30 分ごとに起きて日本時間で決める: `force-once` か `EXEC_PLAN_MANUAL=1` は時刻の決まりを飛ばす ／
   今日 < `m2-date` か 8:31 前は作らん ／ `fail-state` が 3 回か最後の失敗から 60 分未満は作らん ／
   `last-built` が今日 8:31 前なら作る ／ 台帳に前に作った後の `keeper-carryover|stalled|okawari` の done が
