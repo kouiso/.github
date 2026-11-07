@@ -17,12 +17,12 @@
        "name": "Backlog"
       },
       {
-       "id": "opt-In Progress",
-       "name": "In Progress"
+       "id": "opt-In progress",
+       "name": "In progress"
       },
       {
-       "id": "opt-In Review",
-       "name": "In Review"
+       "id": "opt-In review",
+       "name": "In review"
       },
       {
        "id": "opt-Done",
@@ -46,47 +46,17 @@
       {
        "id": "opt-P2",
        "name": "P2"
-      }
-     ]
-    },
-    {
-     "id": "F_wait",
-     "name": "Wait",
-     "dataType": "SINGLE_SELECT",
-     "options": [
-      {
-       "id": "opt-W1",
-       "name": "W1"
       },
       {
-       "id": "opt-W2",
-       "name": "W2"
-      },
-      {
-       "id": "opt-W3",
-       "name": "W3"
+       "id": "opt-P3",
+       "name": "P3"
       }
      ]
     },
     {
      "id": "F_est",
-     "name": "Estimate",
+     "name": "Story Point",
      "dataType": "NUMBER"
-    },
-    {
-     "id": "F_carry",
-     "name": "Carryover",
-     "dataType": "NUMBER"
-    },
-    {
-     "id": "F_start",
-     "name": "Start date",
-     "dataType": "DATE"
-    },
-    {
-     "id": "F_end",
-     "name": "End date",
-     "dataType": "DATE"
     },
     {
      "id": "F_iter",
@@ -215,7 +185,7 @@
        {
         "number": 8,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]
@@ -257,7 +227,7 @@
        {
         "number": 4,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]
@@ -299,7 +269,7 @@
        {
         "number": 3,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]
@@ -327,15 +297,9 @@
      "fieldValues": {
       "nodes": [
        {
-        "name": "P1",
+        "name": "P3",
         "field": {
          "name": "Priority"
-        }
-       },
-       {
-        "name": "W1",
-        "field": {
-         "name": "Wait"
         }
        },
        {
@@ -347,7 +311,7 @@
        {
         "number": 6,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]
@@ -389,7 +353,7 @@
        {
         "number": 2,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]
@@ -425,7 +389,7 @@
        {
         "number": 5,
         "field": {
-         "name": "Estimate"
+         "name": "Story Point"
         }
        }
       ]

@@ -1,10 +1,10 @@
-"""scrum-keeper の試験 17 本。GitHub には触らず、本物の応答と同じ形の dict を FakeClient に読ませる。"""
+"""scrum-keeper の試験。GitHub には触らず、本物の応答と同じ形の dict を FakeClient に読ませる。"""
 import datetime as dt
 import re
 
 from helpers import (CUR, DESC, NOW_MON, NOW_WED, TITLE, item, ledger_lines, make_board, make_client, monday_range,
                      run, week)
-from scrum_keeper.github_client import FakeClient
+from scrum_keeper.github_client import FakeClient, GhClient, GhError
 from scrum_keeper.model import CAPACITY_RE
 
 
@@ -12,35 +12,23 @@ def moved(client):
     return [w for w in client.writes if w[0] == "item"]
 
 
-# 1. 今週に open・Wait 空・Done でない物が 0 なら、おかわりが動く
+# 1. 今週に open・Done でない物が 0 なら、おかわりが動く
 def test_01_okawari_fires_when_current_week_has_no_workable_item(tmp_path):
     board = make_board([
         {"n": 1, "week": CUR, "state": "CLOSED", "status": "Done"},
         {"n": 2, "week": CUR, "status": "Done"},                 # open だが Done
-        {"n": 3, "week": CUR, "wait": "W1"},                     # 待ち
         {"n": 10, "week": "2026-11-09", "prio": "P0", "est": 8},
         {"n": 11, "week": "2026-11-09", "prio": "P1", "est": 8},
     ])
     c = make_client(board)
     assert run(tmp_path, c, job="okawari", now=NOW_WED) == 0
     assert week(c, "o/1", 10) == CUR and week(c, "o/1", 11) == CUR
-    assert item(c, "o/1", 10).carry == 0  # 前倒しは繰り越しやない
 
 
-# 2. Wait の物は「空」の判定を邪魔せんし、引いてもこん。今週に仕事があれば動かん
-def test_02_wait_items_do_not_block_and_are_never_pulled(tmp_path):
-    board = make_board([
-        {"n": 3, "week": CUR, "wait": "W1"},
-        {"n": 12, "week": "2026-11-09", "prio": "P0", "wait": "W2", "est": 1},
-        {"n": 10, "week": "2026-11-09", "prio": "P2", "est": 1},
-    ])
-    c = make_client(board)
-    run(tmp_path, c, job="okawari", now=NOW_WED)
-    assert week(c, "o/1", 10) == CUR
-    assert week(c, "o/1", 12) == "2026-11-09"
-    # 1 週に入りきらん大きい物は引かん（引いても見込み無し (b) が戻して Carryover だけ増えるため）
-    huge = make_client(make_board([{"n": 3, "week": CUR, "wait": "W1"},
-                                   {"n": 13, "week": "2026-11-09", "prio": "P0", "est": 500},
+# 2. 今週に仕事があれば引かん。1 週に入りきらん大きい物も引かん
+def test_02_okawari_skips_busy_week_and_oversized_item(tmp_path):
+    # 1 週に入りきらん大きい物は引かん（引いても見込み無し (b) が戻すため）
+    huge = make_client(make_board([{"n": 13, "week": "2026-11-09", "prio": "P0", "est": 500},
                                    {"n": 14, "week": "2026-11-09", "prio": "P2", "est": 1}]))
     run(tmp_path / "h", huge, job="okawari", now=NOW_WED)
     assert week(huge, "o/1", 13) == "2026-11-09" and week(huge, "o/1", 14) == CUR
@@ -62,7 +50,7 @@ def test_03_pbi_moves_with_children_and_follows_latest_child_week(tmp_path):
     c = make_client(board)
     run(tmp_path, c, job="okawari", now=NOW_WED)
     assert {week(c, "o/1", n) for n in (20, 21, 22)} == {CUR}
-    # 繰り越し側: 親は 1 度だけ +1、その後は子の一番遅い週へ（+1 しない）
+    # 繰り越し側: 親は子の一番遅い週へ
     board2 = make_board([
         {"n": 30, "week": "2026-10-26", "children": ["o/r#31", "o/r#32"]},
         {"n": 31, "week": "2026-10-26", "parent": "o/r#30"},
@@ -70,8 +58,8 @@ def test_03_pbi_moves_with_children_and_follows_latest_child_week(tmp_path):
     ])
     c2 = make_client(board2)
     run(tmp_path / "b", c2, job="carryover")
-    assert week(c2, "o/1", 31) == CUR and item(c2, "o/1", 31).carry == 1
-    assert week(c2, "o/1", 30) == "2026-11-16" and item(c2, "o/1", 30).carry == 1
+    assert week(c2, "o/1", 31) == CUR
+    assert week(c2, "o/1", 30) == "2026-11-16"
 
 
 # 4. 閉じとるのに Done やない物は繰り越さず、食い違いとして出す
@@ -97,7 +85,6 @@ def test_05_double_run_is_noop_and_cas_race_is_skipped(tmp_path, capsys):
     first = len(moved(c))
     run(tmp_path, c, job="carryover")
     assert first == 2 and len(moved(c)) == 2
-    assert item(c, "o/1", 50).carry == 1
     lines = ledger_lines(tmp_path)
     assert [x["phase"] for x in lines] == ["intent", "done"] * 2
     assert {"ts", "wave", "step", "target", "class", "prio", "pre", "phase"} <= set(lines[0])
@@ -113,7 +100,7 @@ def test_05_double_run_is_noop_and_cas_race_is_skipped(tmp_path, capsys):
     capsys.readouterr()
     run(tmp_path / "r", c2, job="carryover")
     assert "race" in capsys.readouterr().err
-    assert week(c2, "o/1", 52) == "2026-11-09" and item(c2, "o/1", 52).carry == 0
+    assert week(c2, "o/1", 52) == "2026-11-09"
     assert week(c2, "o/1", 53) == CUR
 
 
@@ -144,18 +131,32 @@ def test_06_jst_boundary_ignores_host_clock_and_weekly_jobs_follow_last_run(tmp_
     assert "report" not in re.search(r"jobs=(\S+)", capsys.readouterr().err).group(1).split(",")
 
 
-# 7. 見込み無し (a): 48 時間 1 分で動き、47 時間 59 分では残る
-def test_07_stalled_a_threshold(tmp_path):
-    c = make_client(make_board([
-        {"n": 70, "week": CUR, "wait": "W1", "updated": "2026-11-02T02:59:00Z"},   # 48h01m 前
-        {"n": 71, "week": CUR, "wait": "W1", "updated": "2026-11-02T03:01:00Z"},   # 47h59m 前
-        {"n": 72, "week": CUR, "updated": "2026-10-01T00:00:00Z"},                 # Wait 無しは対象外
-    ]))
-    run(tmp_path, c, job="stalled", now=NOW_WED)
-    assert week(c, "o/1", 70) == "2026-11-09" and item(c, "o/1", 70).carry == 0  # 繰り越しやない週内の組み替え
-    assert week(c, "o/1", 71) == CUR and week(c, "o/1", 72) == CUR
-    done = [x for x in ledger_lines(tmp_path) if x["phase"] == "done"]
-    assert done[0]["wait"] == "W1"  # 週の報告が Wait の値ごとに数えるため
+# 7. 盤から消える項目（Wait・Carryover・Size・Start date・End date）は、在っても無くても読みも書きもせん
+def test_07_legacy_fields_are_never_read_or_written(tmp_path, capsys):
+    rows = [{"n": 70, "week": "2026-10-26", "legacy": True},           # 前は Wait 付きで飛ばしとった物も動く
+            {"n": 71, "week": CUR, "est": 4, "legacy": True},
+            {"n": 72, "week": "2026-11-09", "prio": "P0", "est": 2, "legacy": True}]
+    for legacy in (True, False):
+        c = make_client(make_board(rows, legacy=legacy))
+        d = tmp_path / str(legacy)
+        assert run(d, c, now=NOW_WED) == 0
+        assert week(c, "o/1", 70) == CUR
+        assert {len(w) for w in moved(c)} == {4}  # ("item", board, key, iteration) だけ
+        pre = [x["pre"] for x in ledger_lines(d) if x["phase"] == "intent" and x["step"] == "keeper-carryover"]
+        assert pre == [{"Iteration": "it-2026-10-26"}]
+    # 本物の書き込みの文も Iteration の 1 本だけ
+    sent = []
+
+    class Spy(GhClient):
+        def _gql(self, query, **variables):
+            sent.append(query)
+            return {"data": {}}
+
+    b = make_board(rows, legacy=True)
+    Spy().set_item_fields(b, b.items[0], "it-2026-11-02")
+    assert len(sent) == 1 and sent[0].count("updateProjectV2ItemFieldValue") == 1 and "F_iter" in sent[0]
+    for gone in ("F_wait", "F_carry", "F_size", "F_start", "F_end"):
+        assert gone not in sent[0]
 
 
 def cap_board(items, cap="70", count_from="2026-10-26", **kw):
@@ -174,15 +175,14 @@ def test_08_stalled_b_exactly_at_limit_stays(tmp_path):
 def test_09_stalled_b_crossing_item_and_all_below_move(tmp_path):
     c = make_client(cap_board([
         {"n": 90, "week": CUR, "prio": "P2", "est": 20, "status": "In Progress"},
-        {"n": 91, "week": CUR, "prio": "P0", "est": 20, "end": "2026-11-05"},
-        {"n": 92, "week": CUR, "prio": "P0", "est": 20, "end": "2026-11-06"},   # 累計 60 > 50 ここから下
+        {"n": 91, "week": CUR, "prio": "P0", "est": 20},
+        {"n": 92, "week": CUR, "prio": "P0", "est": 20},   # 累計 60 > 50 ここから下
         {"n": 93, "week": CUR, "prio": "P1", "est": 5},
         {"n": 94, "week": CUR, "prio": "P2", "est": 5},
     ]))
     run(tmp_path, c, job="stalled", now=NOW_WED)
     assert week(c, "o/1", 90) == CUR and week(c, "o/1", 91) == CUR
     assert [week(c, "o/1", n) for n in (92, 93, 94)] == ["2026-11-09"] * 3  # 93・94 は詰め直せば入るが動く
-    assert item(c, "o/1", 92).carry == 0  # Carryover を足すのは carryover だけ
 
 
 # 10. 見込み無し (b): 1 番上だけで超えたら全部。上限 0 以下も全部
@@ -195,43 +195,56 @@ def test_10_stalled_b_top_item_over_limit_and_zero_limit(tmp_path):
     assert week(c0, "o/1", 102) == "2026-11-09"
 
 
-# 11. count_from より前の週からは Carryover を足さず、後は足す。2 以上は分け直し候補
-def test_11_count_from_gate_and_resplit_candidates(tmp_path):
-    before = make_board([{"n": 110, "week": "2026-10-26", "carry": 1}], description=DESC.replace("2026-10-26", "2026-11-09"))
-    c = make_client(before)
-    run(tmp_path, c, job="carryover")
-    assert week(c, "o/1", 110) == CUR and item(c, "o/1", 110).carry == 1  # 足さん
-    after = make_board([{"n": 111, "week": "2026-11-09", "carry": 1}, {"n": 112, "week": "2026-11-16", "carry": 2}],
-                       description=DESC.replace("2026-10-26", "2026-11-09"), completed_before="2026-11-16")
-    c2 = make_client(after)
-    now = "2026-11-16T00:05+09:00"
-    run(tmp_path / "b", c2, job="carryover", now=now)
-    assert item(c2, "o/1", 111).carry == 2 and week(c2, "o/1", 111) == "2026-11-16"
-    run(tmp_path / "b", c2, job="report", now=now)
-    body = c2.status_updates["o/1"][0]
-    assert "resplit-candidates(carryover>=2): 2 o/r#111, o/r#112" in body
+# 11. 並べ順は P0→P1→P2→P3→空。量は Story Point を読み、無い盤では Estimate を読む
+def test_11_priority_p3_order_and_story_point(tmp_path):
+    # 水曜は日曜まで 5 日。70 時間 ÷ 7 × 5 = 50。上から 3 件（P0・P1・P2）で 50
+    rows = [{"n": 113, "week": CUR, "est": 1},
+            {"n": 112, "week": CUR, "prio": "P3", "est": 1},
+            {"n": 111, "week": CUR, "prio": "P2", "est": 10},
+            {"n": 110, "week": CUR, "prio": "P1", "est": 20},
+            {"n": 114, "week": CUR, "prio": "P0", "est": 20}]
+    c = make_client(cap_board(rows))
+    run(tmp_path, c, job="stalled", now=NOW_WED)
+    assert [week(c, "o/1", n) for n in (114, 110, 111)] == [CUR] * 3
+    assert week(c, "o/1", 112) == "2026-11-09" and week(c, "o/1", 113) == "2026-11-09"
+    assert c.boards["o/1"].items[3].estimate == 20  # Story Point を読んだ
+    # 名前の付け替え前の盤（Estimate）も同じ量で読む
+    old = make_client(cap_board([dict(r, est_field="Estimate") for r in rows], est_field="Estimate"))
+    run(tmp_path / "old", old, job="stalled", now=NOW_WED)
+    assert week(old, "o/1", 111) == CUR and week(old, "o/1", 112) == "2026-11-09"
 
 
-# 12. extend は先 8 週を保ち、既存の id を残す。件数が減ったら HALT。8 週目は「量に空きがある一番早い週が 8 週目」の物だけ埋める
-def test_12_extend_keeps_eight_weeks_preserves_ids_and_halts_on_loss(tmp_path):
-    weeks = monday_range(n=9)  # 10-19 〜 12-14（今週から数えて 7 本）
-    fillers = [{"n": 130 + k, "week": w, "est": 176} for k, w in enumerate(
-        ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-30", "2026-12-07", "2026-12-14"])]
-    items = fillers + [{"n": 120, "prio": "P0", "est": 10}, {"n": 121, "prio": "P1", "est": 10}, {"n": 122, "wait": "W1"}]
-    c = make_client(make_board(items, weeks=weeks))
+# 12. extend は今週から 3 本を保ち、既存の id を残す。新しい週の題は「Iteration N」。件数が減ったら HALT
+def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
+    weeks = monday_range(n=4)  # 10-19 〜 11-09（今週から数えて 2 本）
+    titles = {"2026-10-19": "Iteration 5", "2026-10-26": "Sprint 2026-10-26", "2026-11-09": "Iteration 2"}
+    fillers = [{"n": 130 + k, "week": w, "est": 176} for k, w in enumerate(["2026-11-02", "2026-11-09"])]
+    items = fillers + [{"n": 120, "prio": "P0", "est": 10}, {"n": 121, "prio": "P1", "est": 10}]
+    mk = lambda: make_board(items, weeks=weeks, iter_titles=titles)
+    c = make_client(mk())
     old_ids = {i.id for i in c.boards["o/1"].iterations}
     assert run(tmp_path, c, job="extend") == 0
     its = c.boards["o/1"].iterations
     assert old_ids <= {i.id for i in its}
-    assert len([i for i in its if i.start >= dt.date.fromisoformat(CUR)]) == 8
-    assert week(c, "o/1", 120) == "2026-12-21" and week(c, "o/1", 121) == "2026-12-21"
-    assert week(c, "o/1", 122) is None and week(c, "o/1", 130) == CUR
-    # 早い週に空きがあるなら、8 週目へ隠さず週なしのまま残す（P0 を 7 週先に置かん）
+    ahead = [i for i in its if i.start >= dt.date.fromisoformat(CUR)]
+    assert [i.start.isoformat() for i in ahead] == ["2026-11-02", "2026-11-09", "2026-11-16"]
+    new = ahead[-1]
+    assert new.title == "Iteration 6" and new.duration == 7  # 終わった週の Iteration 5 も数えて次の番号
+    assert week(c, "o/1", 120) == "2026-11-16" and week(c, "o/1", 121) == "2026-11-16"
+    assert week(c, "o/1", 130) == CUR
+    assert run(tmp_path, c, job="extend") == 0
+    assert len(c.boards["o/1"].iterations) == len(its)  # 2 回目は何も足さん
+    # 「Iteration N」が 1 つも無ければ 1 から。足りん週が 2 つなら続き番号
+    fresh = make_client(make_board([], weeks=monday_range(n=3)))
+    assert run(tmp_path / "fresh", fresh, job="extend") == 0
+    assert [i.title for i in fresh.boards["o/1"].iterations if i.start >= dt.date.fromisoformat(CUR)] == \
+        ["Sprint 2026-11-02", "Iteration 1", "Iteration 2"]
+    # 早い週に空きがあるなら、先の週へ隠さず週なしのまま残す（P0 を先の週に置かん）
     roomy = make_client(make_board([{"n": 140, "prio": "P0", "est": 10}], weeks=weeks))
     assert run(tmp_path / "roomy", roomy, job="extend") == 0
     assert week(roomy, "o/1", 140) is None
     # 反復の設定を書き直して id が保たれるかを測り終えた Project だけ、本番で書く
-    blocked = make_client(make_board(items, weeks=weeks))
+    blocked = make_client(mk())
     assert run(tmp_path / "blocked", blocked, job="extend", verified=None) == 1
     assert not [w for w in blocked.writes if w[0] == "iterations"]
     assert run(tmp_path / "blocked2", blocked, "--dry-run", job="extend", verified=None) == 0
@@ -243,9 +256,22 @@ def test_12_extend_keeps_eight_weeks_preserves_ids_and_halts_on_loss(tmp_path):
                 if i.iteration_id == "it-2026-11-09":
                     i.iteration_id = None  # 書き直しで件数が減った
 
-    bad = Lossy({"o/1": make_board(items, weeks=weeks)})
+    bad = Lossy({"o/1": mk()})
     assert run(tmp_path / "bad", bad, job="extend") == 6
     assert (tmp_path / "bad" / "ledger" / "HALT").exists()
+    # 本物の書き直しの文: 既存の週は id 付き、新しい週は id 無しで 7 日
+    sent = []
+
+    class Spy(GhClient):
+        def _gql(self, query, **variables):
+            sent.append(query)
+            return {"data": {}}
+
+    b = mk()
+    from scrum_keeper.model import Iteration
+    Spy().update_iteration_config(b, b.iterations + [Iteration("new:2026-11-16", "Iteration 6", dt.date(2026, 11, 16))])
+    assert all(f'id:"{i.id}"' in sent[0] for i in b.iterations)
+    assert '{title:"Iteration 6",startDate:"2026-11-16",duration:7}' in sent[0]
 
 
 # 13. 相手は allow.txt ∩ scrum-board: v1。_ で始まる題の物は触らん
@@ -367,21 +393,15 @@ def item_writes(client):
     return [w for w in client.writes if w[0] == "item"]
 
 
-# 18. おかわりと見込み無し (b) は同じ量を見る。何回回しても引いては戻すが起きず、Carryover も増えん
+# 18. おかわりと見込み無し (b) は同じ量を見る。何回回しても引いては戻すが起きん
 def test_18_okawari_and_stalled_b_do_not_ping_pong(tmp_path):
-    # 今週は待ちの件だけ（60h）、来週に 40h。量 70h。月曜 00:00〜02:45 の 12 回
+    # 今週は空、来週に 40h。量 70h。月曜 00:00〜02:45 の 12 回
     c = make_client(make_board(
-        [{"n": 1, "week": CUR, "prio": "P0", "est": 60, "wait": "W1"}, {"n": 2, "week": "2026-11-09", "prio": "P1", "est": 40}],
+        [{"n": 1, "week": CUR, "status": "Done"}, {"n": 2, "week": "2026-11-09", "prio": "P1", "est": 40}],
         description=FUTURE_COUNT.replace("176h", "70h")))
     ticks(tmp_path, c, [f"2026-11-02T{h:02d}:{m:02d}+09:00" for h in (0, 1, 2) for m in (0, 15, 30, 45)])
-    assert week(c, "o/1", 2) == CUR and item(c, "o/1", 2).carry == 0
+    assert week(c, "o/1", 2) == CUR
     assert len(item_writes(c)) == 1  # 引いたのは 1 回だけ。毎回の書き込みは無い
-    # 待ちの件が 90h、来週に 30h。量 176h。木曜の 00:00〜02:45
-    c2 = make_client(make_board(
-        [{"n": 1, "week": CUR, "prio": "P0", "est": 90, "wait": "W1", "updated": "2026-11-04T10:00:00Z"},
-         {"n": 10, "week": "2026-11-09", "prio": "P1", "est": 30}], description=FUTURE_COUNT))
-    ticks(tmp_path / "b", c2, [f"2026-11-05T{h:02d}:{m:02d}+09:00" for h in (0, 1, 2) for m in (0, 15, 30, 45)])
-    assert item(c2, "o/1", 10).carry == 0 and len(item_writes(c2)) <= 1
     # 水曜の昼に空の今週へ 15 件(10h)の来週から引き、翌日の夜中の見込み無し (b) が押し戻さん
     c3 = make_client(make_board([{"n": 200 + k, "week": "2026-11-09", "prio": "P1", "est": 10} for k in range(15)],
                                 description=FUTURE_COUNT))
@@ -389,12 +409,11 @@ def test_18_okawari_and_stalled_b_do_not_ping_pong(tmp_path):
     pulled = len(item_writes(c3))
     assert 0 < pulled < 15
     ticks(tmp_path / "c", c3, ["2026-11-05T00:30+09:00", "2026-11-05T01:00+09:00"])
-    assert len(item_writes(c3)) == pulled and all(item(c3, "o/1", 200 + k).carry == 0 for k in range(15))
-    # 木曜に 20h を 5 件、翌金曜 00:20 に押し戻されて Carryover が付く、は起きん
+    assert len(item_writes(c3)) == pulled
+    # 木曜に 20h を 5 件、翌金曜 00:20 に押し戻される、は起きん
     c4 = make_client(make_board([{"n": 300 + k, "week": "2026-11-09", "prio": "P1", "est": 20} for k in range(5)],
                                 description=FUTURE_COUNT))
     ticks(tmp_path / "d", c4, ["2026-11-05T12:00+09:00", "2026-11-06T00:20+09:00"])
-    assert all(item(c4, "o/1", 300 + k).carry == 0 for k in range(5))
     assert not [w for w in item_writes(c4) if w[3] == "it-2026-11-09"]  # 来週へ戻す書き込みは無い
 
 
@@ -425,23 +444,21 @@ def test_20_carryover_from_any_ended_week_without_monday_window(tmp_path):
                                description=desc))
     ticks(tmp_path, c, ["2026-11-02T07:00+09:00"], job="carryover")
     assert week(c, "o/1", 600) == CUR and week(c, "o/1", 601) == CUR
-    assert item(c, "o/1", 600).carry == 1 and item(c, "o/1", 601).carry == 1  # 動かした 1 回につき 1 だけ
     # 次の月曜まで放っておかれた物は、報告の stranded に出る
     stuck = make_client(make_board([{"n": 602, "week": "2026-10-19"}], description=desc))
     ticks(tmp_path / "s", stuck, ["2026-11-02T07:00+09:00"], job="report")
     assert "stranded=1" in stuck.status_updates["o/1"][0]
 
 
-# 21. Carryover を足すのは carryover だけ。同じ月曜の回で stalled が重ねて足さん
-def test_21_carryover_incremented_once_per_week(tmp_path):
-    desc = DESC.replace("2026-10-26", "2026-10-12")
-    wait = {"n": 700, "week": "2026-10-26", "wait": "W1", "updated": "2026-10-28T00:00:00Z"}
+# 21. 月曜の回: 終わった週の物は今週へ、日曜までに入らん分は来週へ。報告に待ちと繰り越し回数の行は無い
+def test_21_monday_tick_carries_then_trims_and_reports_without_wait(tmp_path):
     many = [{"n": 710 + k, "week": "2026-10-26", "prio": "P1", "est": 10} for k in range(20)]
-    c = make_client(make_board([wait] + many, description=desc))
+    c = make_client(make_board(many, description=FUTURE_COUNT))
     ticks(tmp_path, c, [NOW_MON])
-    assert week(c, "o/1", 700) == "2026-11-09" and item(c, "o/1", 700).carry == 1
-    assert {item(c, "o/1", 710 + k).carry for k in range(20)} == {1}  # 量を超えて来週へ戻った物も 1 のまま
-    assert "resplit-candidates(carryover>=2): 0" in c.status_updates["o/1"][0]
+    weeks = [week(c, "o/1", 710 + k) for k in range(20)]
+    assert weeks.count(CUR) == 17 and weeks.count("2026-11-09") == 3  # 176h に 10h が 17 件
+    body = c.status_updates["o/1"][0]
+    assert "stalled-wait" not in body and "resplit" not in body and "empty-story-point=0" in body
 
 
 # 22. 上限の返事: 1 秒空け、60/120/240 秒で再試行。HALT は 5 回続いた時だけ
@@ -471,12 +488,12 @@ def test_22_rate_limit_backs_off_and_halts_only_after_five(tmp_path, no_real_sle
     assert (tmp_path / "y" / "state" / "rate-limit-streak").read_text().strip() == "0"
 
 
-# 23. 同じ値の書き込みはせん。待ちの子が居る親は動かさず、毎回同じ書き込みを繰り返さん
+# 23. 同じ値の書き込みはせん。何度回しても一度動かした物を書き直さん
 def test_23_no_repeated_identical_writes(tmp_path):
     c = make_client(make_board([
-        {"n": 3, "week": CUR, "wait": "W1"},
+        {"n": 3, "week": CUR},
         {"n": 20, "week": "2026-11-09", "children": ["o/r#21"], "est": 1},
-        {"n": 21, "week": "2026-11-09", "parent": "o/r#20", "wait": "W2", "est": 1},
+        {"n": 21, "week": "2026-11-09", "parent": "o/r#20", "est": 1},
     ], description=FUTURE_COUNT))
     for k in range(8):
         run(tmp_path, c, job="okawari", now=f"2026-11-04T1{k}:00+09:00")
@@ -500,22 +517,45 @@ def test_24_halt_placed_mid_tick_stops_further_writes(tmp_path):
     assert not (tmp_path / "state" / "last-run").exists()
 
 
-# 25. 週を動かす時は Start/End date も同じ書き込みで直す。期日が動かす先の週の中にあれば残す
-def test_25_move_rewrites_start_and_end_date(tmp_path):
-    desc = DESC.replace("2026-10-26", "2026-10-12")
-    c = make_client(make_board([
-        {"n": 1000, "week": "2026-10-26", "start": "2026-10-26", "end": "2026-11-01"},
-        {"n": 1001, "week": "2026-10-26", "start": "2026-10-26", "end": "2026-11-05"},   # 局長が言った期日
-        {"n": 1002, "week": "2026-10-26"},
-    ], description=desc))
-    run(tmp_path, c, job="carryover")
-    a, b, d = (item(c, "o/1", n) for n in (1000, 1001, 1002))
-    assert (a.start_date, a.end_date) == (dt.date(2026, 11, 2), dt.date(2026, 11, 8))
-    assert (b.start_date, b.end_date) == (dt.date(2026, 11, 2), dt.date(2026, 11, 5))
-    assert (d.start_date, d.end_date) == (dt.date(2026, 11, 2), dt.date(2026, 11, 8))
-    # 週を動かさん書き込み（待ちの親など）は日付にも触らん
-    run(tmp_path, c, job="carryover")
-    assert len(item_writes(c)) == 3
+# 25. 複数の Project を 1 回で回す。1 つが読めんでも、Iteration の項目が無くても、残りは回り、失敗はログに出る
+def test_25_many_boards_and_one_failure_does_not_stop_others(tmp_path, capsys):
+    rows = [{"n": 1000, "week": "2026-10-26"}]
+    b1 = make_board(rows, number=1, description=FUTURE_COUNT)
+    b3 = make_board(rows, number=3, description="no marker")       # 一覧に書いた物はマーカー無しでも相手
+    no_iter = make_board(rows, number=4)
+    del no_iter.field_ids["Iteration"]
+    c = make_client(b1, b3, no_iter)
+    boards = tmp_path / "boards.txt"
+    boards.write_text("# 相手\no/1\no/2   # 無い盤\no/3\no/4\no/1\n")
+    capsys.readouterr()
+    assert run(tmp_path, c, "--boards-file", str(boards), board=None, job="carryover") == 1
+    err = capsys.readouterr().err
+    assert "board failed board=o/2 step=read" in err and "board failed board=o/4 step=read: no Iteration field" in err
+    assert "tick boards=2 failed=2" in err
+    assert {w[1] for w in moved(c)} == {"o/1", "o/3"} and len(moved(c)) == 2
+    assert not (tmp_path / "state" / "last-run").exists()
+    # --board は何回でも書ける
+    c2 = make_client(make_board(rows, number=1), make_board(rows, number=3, description="no marker"))
+    assert run(tmp_path / "m", c2, "--board", "o/3", job="carryover") == 0
+    assert {w[1] for w in moved(c2)} == {"o/1", "o/3"}
+
+    # 1 つの Project の仕事の途中で gh が落ちても、次の Project の仕事は回る
+    class FlakySync(FakeClient):
+        def list_mapped_repos(self, board):
+            if board.number == 1:
+                raise GhError("boom")
+            return super().list_mapped_repos(board)
+
+    repos = {"o/r3": {"yml": "owner: o\nproject_number: 3\n", "issues": [(5, "o/r3|5", "Issue")]}}
+    c3 = FlakySync({"o/1": make_board([], number=1), "o/3": make_board([], number=3)}, repos)
+    capsys.readouterr()
+    assert run(tmp_path / "f", c3, "--board", "o/3", job="sync") == 1
+    assert "board failed board=o/1 job=sync: boom" in capsys.readouterr().err
+    assert [w[2] for w in c3.writes if w[0] == "add"] == ["o/r3#5"]
+    # 一覧のファイルが無い・書き間違いは引数の誤り
+    assert run(tmp_path / "x", c, "--boards-file", str(tmp_path / "none.txt"), board=None, job="carryover") == 2
+    (tmp_path / "bad.txt").write_text("o-1\n")
+    assert run(tmp_path / "x", c, "--boards-file", str(tmp_path / "bad.txt"), board=None, job="carryover") == 2
 
 
 # 26. 起動の入口は、決めた commit と寸分違わん木だけを動かす
@@ -562,9 +602,9 @@ def test_26_launcher_refuses_anything_but_the_pinned_clean_tree(tmp_path):
 def test_27_same_value_move_is_not_written(tmp_path):
     from scrum_keeper.job import Move, Runner
     from scrum_keeper.ledger import Ledger
-    c = make_client(make_board([{"n": 20, "week": "2026-11-09", "carry": 1}]))
+    c = make_client(make_board([{"n": 20, "week": "2026-11-09"}]))
     board = c.read_board("o", 1)
     pbi = board.items[0]
     rn = Runner(c, Ledger(tmp_path / "l", None), False, 50)
-    assert rn.execute_moves(board, "okawari", [Move(pbi, "it-2026-11-09", None), Move(pbi, "it-2026-11-09", 1)]) == 0
+    assert rn.execute_moves(board, "okawari", [Move(pbi, "it-2026-11-09"), Move(pbi, "it-2026-11-09")]) == 0
     assert c.writes == [] and not (tmp_path / "l" / "K.jsonl").exists()

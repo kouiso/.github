@@ -1,0 +1,7 @@
+# scrum_keeper が 15 分ごとに回す GitHub Project（<owner>/<番号> を 1 行ずつ）。
+# launchd の入口は引数が無い時にこのファイルを読む。1 つが失敗しても残りは回り、失敗はログに残る。
+ritmo-inc/2
+ritmo-inc/3
+ritmo-inc/4
+ritmo-inc/8
+ritmo-inc/10

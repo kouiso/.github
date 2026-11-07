@@ -7,41 +7,49 @@ Mac の launchd から動かし、鍵は手元の `gh` の認証をそのまま�
 
 | 仕事 | いつ（JST） | 内容 |
 | --- | --- | --- |
-| extend | 毎回 | Iteration を今週から 8 本に保つ。既存の id は全部残して送り直し、前後で件数が減ったら HALT。新しい 8 週目には、週に入っとらん物を全 Project 1 つの順で並べ、量に空きがある一番早い週が 8 週目になった物だけ入れる（早い週に空きがある物は触らず「週なし」のまま残す） |
-| capacity | 週の最初の回 | 前の週に閉じた Estimate の合計（空は 1.5）を 70〜282 時間に収め、説明文の目印だけ置き換える |
-| carryover | 毎回 | 終わった週に残る open で Done でない課題を、どの週からでも今週へ。Carryover を足すのはここだけ。閉じたのに Done でない物は動かさず食い違いとして出す |
-| stalled (a) | 毎回 | 今週の Wait 付きで、課題の更新が 48 時間より前の物を来週へ（Carryover は足さない） |
-| stalled (b) | 日の最初の回 | 日曜までに入らない分を来週へ。全 Project の今週の物を 1 つの順（In Progress、Priority、End date、repo、番号）に並べて 1 回で切る（Carryover は足さない） |
+| extend | 毎回 | Iteration を今週から 3 本に保つ（月曜始まりの 7 日）。足す週の題は `Iteration N`。N は終わった週も含めた `Iteration N` の一番大きい番号の次（無ければ 1）。既存の週は id 付きで全部送り直し、前後で件数が減ったら HALT。先に作り過ぎた週は消さない。新しい 3 週目には、週に入っとらん物を全 Project 1 つの順で並べ、量に空きがある一番早い週が 3 週目になった物だけ入れる（早い週に空きがある物は触らず「週なし」のまま残す） |
+| capacity | 週の最初の回 | 前の週に閉じた Story Point の合計（空は 1.5）を 70〜282 時間に収め、説明文の目印だけ置き換える |
+| carryover | 毎回 | 終わった週に残る open で Done でない課題を、どの週からでも今週へ。繰り越した回数は数えない。閉じたのに Done でない物は動かさず食い違いとして出す |
+| stalled | 日の最初の回 | 日曜までに入らない分を来週へ。全 Project の今週の物を 1 つの順（In progress、Priority、repo、番号）に並べて 1 回で切る |
 | okawari | 毎回 | 今週にやれる物が 0 になった Project へ、来週の上から引く。PBI は open の SBI と一緒に |
 | sync | 毎回 | `.github/scrum-board.yml` がこの Project を指す repo の open の課題を Backlog で足す |
-| report | 週の最初の回 | Status update を 1 週 1 本。先頭行 `scrum-keeper:week=<月曜>` で二重投稿を防ぐ。終わった週に残る物（stranded）も数える |
+| report | 週の最初の回 | Status update を 1 週 1 本。先頭行 `scrum-keeper:week=<月曜>` で二重投稿を防ぐ。終わった週に残る物（stranded）と Story Point が空の件数も数える |
 
 - 「週の最初の回」「日の最初の回」は時刻の窓ではなく、成功した最後の回（`last-run`）より後の最初の回です。
   Mac が月曜の夜中に寝ていても、起きた最初の回で取り戻します。`--job all` だけが `last-run` を更新します。
-- 1 週の量は全 Project で 1 つです。stalled (b) も okawari も extend の埋めも、Project をまたいで同じ量・同じ並べ順で
-  1 回で計画します。Wait の付いた物は量に数えません（stalled (b) と okawari が同じ数え方をします）。
-- おかわりが引ける量は「翌日の stalled (b) が押し戻さない量」（翌日の日数ぶん）までです。今日の量まで引くと、
-  毎晩押し戻されて引いては戻すが回るためです。1 件で量を超える物、待ちの子が居る親は引きません。
-- 動かす時は Iteration と同じ書き込みで Start date（その週の月曜）と End date（その週の日曜。期日が動かす先の週に
-  既にあれば残す）も直します。その Project に項目が無ければ書きません。今と同じ値の書き込みはしません。
+- 1 週の量は全 Project で 1 つです。stalled も okawari も extend の埋めも、Project をまたいで同じ量・同じ並べ順で
+  1 回で計画します。
+- 待ちは並び順と GitHub の blockedBy で表す決まりです。keeper は待ちを見分けず、今週の open で Done でない物は全部量に数えます。
+- おかわりが引ける量は「翌日の stalled が押し戻さない量」（翌日の日数ぶん）までです。今日の量まで引くと、
+  毎晩押し戻されて引いては戻すが回るためです。1 件で量を超える物は引きません。
+- 書くのは課題の Iteration だけです。今と同じ値の書き込みはしません。
+- 読む項目は Iteration・Status・Priority・Story Point の 4 つだけです。Story Point が無い盤では、名前の付け替えが済むまで
+  Estimate を読みます。Wait・Carryover・Size・Start date・End date は、盤に在っても無くても読みも書きもしません。
+- Priority は P0（一番上）→ P1 → P2 → P3 → 空の順です。Status の In progress は大文字小文字を見ません（In Progress も同じ）。
 - 週は月曜始まりの 7 日で、計算は常に Asia/Tokyo。ホストの時計は見ません。
 - PR は全部飛ばします。下書き（DraftIssue）は数えるだけです。
-- Carryover は、動かす元の週が `count_from` 以降の時だけ 1 足します。目印は説明文の
-  `scrum-keeper:capacity=<時間>h count_from=<日付>` です。
+- 量の目印は説明文の `scrum-keeper:capacity=<時間>h count_from=<日付>` です。`count_from` より前の週は量を置き換えません。
 - どの仕事も「動かした物は元の週にもう居ない」ので、同じ回を二度走らせても何も起きません。
 
 ## 使い方
 
 ```
-python3 scripts/scrum_keeper/scrum_keeper.py (--board <owner>/<番号> | --allow <ファイル>) [--job all|extend|carryover|stalled|okawari|sync|report|capacity]
+python3 scripts/scrum_keeper/scrum_keeper.py (--board <owner>/<番号> [--board ...] | --boards-file <ファイル> | --allow <ファイル>)
+    [--job all|extend|carryover|stalled|okawari|sync|report|capacity]
     [--now <ISO8601>] [--dry-run] [--halt-file <パス>] [--ledger-dir <ディレクトリ>]
     [--capacity-board <owner>/<番号>] [--max-writes 200] [--fixture <ディレクトリ>] [--state-dir <ディレクトリ>]
 ```
 
 - `--dry-run` は何も書かず、動かす予定を CSV で標準出力に出します。台帳にも書きません。
 - `--job` を名指しした時は、その仕事を必ず走らせます。`all` だけが `last-run` で週・日の仕事を決めます。
-- `--allow` は `owner/番号` を 1 行ずつ。説明文に `scrum-board: v1` がある Project だけが相手です。
-  題名が `_` で始まる物は飛ばします。`--board` を明示した時だけ、その 1 つに必ず動きます。
+- 相手の Project の渡し方は 3 つです。
+  - `--board` は何回でも書けます。書いた物には必ず動きます。
+  - `--boards-file` は `owner/番号` を 1 行ずつ書いたファイル（`#` から後は読まない）。書いた物は全部相手です。
+    launchd の入口は引数が無い時、決めた commit の `scripts/scrum_keeper/boards.txt` をこれで読みます。
+  - `--allow` は同じ形のファイルで、説明文に `scrum-board: v1` がある Project だけが相手です。題名が `_` で始まる物は飛ばします。
+- 1 つの Project が読めない時（無い・権限が無い・Iteration の項目が無い）や、1 つの Project の仕事の途中で gh が失敗した時は、
+  `board failed board=<owner>/<番号> ...` をログに書いてその Project だけ飛ばし、残りは回します。その回は終了コード 1 で、
+  `last-run` は更新しません。上限の返事・HALT・書き込みの上限は全部の Project に効くので、その回ごと止めます。
 - 1 週の量の目印を書き換えるのは、`--capacity-board` がこの回の相手に含まれる時だけです。含まれない時は読むだけです。
 - 題名はログにも CSV にも出しません。出すのは `repo#番号` と件数です。
 
@@ -89,7 +97,7 @@ python3 scripts/scrum_keeper/linear_sweep.py [--team RIT] [--key-ref 'op://...']
 - extend は `<state>/extend-verified.txt` に Project が書いてある時だけ本番で書く（`*` は全部）。反復の設定を丸ごと
   書き直す呼び出しが id を保つことを、練習用の写しで測り終えてから 1 行足す。書いてなければ extend は止まり、
   その回は終了コード 1 になる（`--dry-run` は読むだけなので止まらない）。
-- 書き込みの前に、その課題の Iteration と Carryover を読み直し、読んだ時と違えば `race` として飛ばす。
+- 書き込みの前に、その課題の Iteration を読み直し、読んだ時と違えば `race` として飛ばす。
 - 書き込みは 1 回ごとに `<台帳>/write.lock`（`mkdir`）を最大 30 秒待って取る。取れなければその回を止めて次の回に任せる。
 - 台帳 `<台帳>/K.jsonl` には書く前に `intent`（前の値つき、fsync）、後に `done` を 1 行ずつ足す。
   1 時間の書き込み数は `cap.json` の `content_per_hour`（既定 300）の 6 割で止める。1 回の上限は `--max-writes`。
@@ -104,7 +112,10 @@ python3 scripts/scrum_keeper/linear_sweep.py [--team RIT] [--key-ref 'op://...']
 2. `launchd/scrum-keeper-run.sh` を `~/.local/bin/` に置き、`__HOME__ __HALT_FILE__ __LEDGER_DIR__ __CAPACITY_BOARD__` を差し替える。
    `launchd/scrum-keeper.plist` の `__LABEL__ __HOME__` も差し替えて `~/Library/LaunchAgents/` に置く。
 3. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<ラベル>.plist`
-4. 最初は `--board` で練習用の Project を 1 つだけ渡して数回回し、`last-run` が更新され続けることを確かめてから `allow.txt` に広げる。
+4. 最初は plist の引数に `--board` で練習用の Project を 1 つだけ渡して数回回し、`last-run` が更新され続けることを確かめる。
+   その後 plist の引数を消すと、入口が `boards.txt` の Project を全部回す。相手を増やす・減らすのは `boards.txt` を直して
+   commit し、`pinned-sha` をその commit に進める。
+5. 新しく相手にした Project は、extend の書き直しで id が保たれることを確かめてから `extend-verified.txt` に足す。
 
 戻し方: `launchctl bootout gui/$(id -u)/<ラベル>` してから、この変更を revert する。
 動かした課題は台帳の `pre`（前の値）から元に戻せる。
@@ -126,6 +137,8 @@ GitHub には触りません。本物の `gh api graphql` の応答と同じ形�
   走らせると、終わった週に残る物が一度に今週へ動きます（`--dry-run` の CSV で件数を見てから）。
 - 週の量は前の週に閉じた分 1 週ぶんだけで置き換えます（平滑化なし。70〜282 時間に収めるだけ）。休みの週は量が下限まで下がります。
 - 同じ課題が複数の Project に載っている時は、量の計算で Project の数だけ数えます。
-- 動かす先の週にあらかじめ Start/End date が入っていない物でも、Start＝月曜・End＝日曜を書きます（`board_place.py` と同じ組）。
+- 前の決まりで先に作った週（8 週先まで）は消しません。消すと、その週に入れた課題の Iteration が外れるためです。
+- 1 つの Project で書き込みが 3 回続けて失敗すると、HALT を書いて全部の Project を止めます（読みの失敗は Project ごとに飛ばす）。
+- 量の目印を置いた Project（`--capacity-board`）が読めない回は、量が分からんので全部を止めます。
 - `createProjectV2StatusUpdate` と `updateProjectV2Field` は schema には在りますが、実際の権限と、書き直しで id が保たれるかは
   練習用 Project で書いて測ってから本番に向けてください（上の extend-verified.txt）。

@@ -15,7 +15,7 @@ ITEMS = [
     {"n": 1, "week": "2026-10-26", "prio": "P0", "est": 8, "status": "In Progress"},
     {"n": 2, "week": "2026-10-26", "prio": "P1", "est": 4},
     {"n": 3, "week": "2026-10-26", "state": "CLOSED", "status": "Done", "closed": "2026-10-29T03:00:00Z", "est": 3},
-    {"n": 4, "week": "2026-11-02", "prio": "P1", "est": 6, "wait": "W1", "updated": "2026-10-20T00:00:00Z"},
+    {"n": 4, "week": "2026-11-02", "prio": "P3", "est": 6, "updated": "2026-10-20T00:00:00Z"},
     {"n": 5, "week": "2026-11-09", "prio": "P2", "est": 2},
     {"n": 6, "prio": "P1", "est": 5},
     {"n": 7, "kind": "PullRequest"},
