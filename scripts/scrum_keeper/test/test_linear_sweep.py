@@ -7,6 +7,7 @@ import re
 from helpers import (NOW_WED, TITLE, ledger_lines, linear_fixture, make_linear_client, raw_linear_issue,
                      run_linear)
 from scrum_keeper import linear_client
+from scrum_keeper.job import CSV_COLUMNS
 
 
 def csv_actions(out):
@@ -54,7 +55,7 @@ def test_l2_okawari_suggests_backlog_top_when_cycle_has_no_workable(tmp_path, ca
             if x and not x.startswith("board,")]
     sug = [r[4] for r in rows if r[2] == "okawari-suggest"]
     assert sug == ["RIT-49", "RIT-48", "RIT-50"]
-    assert all(r[9] == "cycle-empty" for r in rows if r[2] == "okawari-suggest")
+    assert all(r[CSV_COLUMNS.index("reason")] == "cycle-empty" for r in rows if r[2] == "okawari-suggest")
     # やれる物が居る回は候補を出さん
     c2 = make_linear_client(linear_fixture(
         cycle_issues=[raw_linear_issue(43, priority=1, estimate=3, cycle="cyc-3")],

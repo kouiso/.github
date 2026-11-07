@@ -1,5 +1,6 @@
 """scrum-keeper の試験。GitHub には触らず、本物の応答と同じ形の dict を FakeClient に読ませる。"""
 import datetime as dt
+import json
 import re
 
 from helpers import (CUR, DESC, NOW_MON, NOW_WED, TITLE, item, ledger_lines, make_board, make_client, monday_range,
@@ -142,7 +143,7 @@ def test_07_legacy_fields_are_never_read_or_written(tmp_path, capsys):
         assert run(d, c, now=NOW_WED) == 0
         assert week(c, "o/1", 70) == CUR
         assert {len(w) for w in moved(c)} == {4}  # ("item", board, key, iteration) だけ
-        pre = [x["pre"] for x in ledger_lines(d) if x["phase"] == "intent" and x["step"] == "keeper-carryover"]
+        pre = [json.loads(x["pre"]) for x in ledger_lines(d) if x["phase"] == "intent" and x["step"] == "keeper-carryover"]
         assert pre == [{"Iteration": "it-2026-10-26"}]
     # 本物の書き込みの文も Iteration の 1 本だけ
     sent = []
