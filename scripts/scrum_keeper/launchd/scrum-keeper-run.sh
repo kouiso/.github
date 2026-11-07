@@ -39,9 +39,10 @@ if [ -n "$ignored" ]; then
   exit 9
 fi
 
-# 引数が無ければ許可リスト。M1 の練習では --board <owner>/<n> を渡す
+# 引数が無ければ、決めた commit の boards.txt に書いた Project を全部回す（1 つ失敗しても残りは回る）。
+# 練習で 1 つだけ回す時は --board <owner>/<n> を渡す
 if [ "$#" -eq 0 ]; then
-  set -- --allow "$STATE/allow.txt"
+  set -- --boards-file "$WORKTREE/scripts/scrum_keeper/boards.txt"
 fi
 
 run=("$PYTHON" -I "$WORKTREE/scripts/scrum_keeper/scrum_keeper.py" "$@" --job all

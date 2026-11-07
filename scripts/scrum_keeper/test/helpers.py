@@ -28,27 +28,37 @@ def _opts(*names):
     return [{"id": f"opt-{n}", "name": n} for n in names]
 
 
-def raw_project(items, weeks=None, description=DESC, title="Board", completed_before=CUR):
+LEGACY_FIELDS = [  # 盤から消える項目。在っても無くても keeper は読みも書きもせん
+    {"id": "F_wait", "name": "Wait", "dataType": "SINGLE_SELECT", "options": _opts("W1", "W2", "W3")},
+    {"id": "F_carry", "name": "Carryover", "dataType": "NUMBER"},
+    {"id": "F_size", "name": "Size", "dataType": "SINGLE_SELECT", "options": _opts("XS", "S", "M")},
+    {"id": "F_start", "name": "Start date", "dataType": "DATE"},
+    {"id": "F_end", "name": "End date", "dataType": "DATE"},
+]
+
+
+def raw_project(items, weeks=None, description=DESC, title="Board", completed_before=CUR, legacy=False,
+                est_field="Story Point", iter_titles=None):
     weeks = weeks if weeks is not None else monday_range()
-    done = [iter_obj(w) for w in weeks if w < completed_before]
-    active = [iter_obj(w) for w in weeks if w >= completed_before]
+    objs = [dict(iter_obj(w), title=(iter_titles or {}).get(w, f"Sprint {w}")) for w in weeks]
+    done = [o for o in objs if o["startDate"] < completed_before]
+    active = [o for o in objs if o["startDate"] >= completed_before]
     fields = [
-        {"id": "F_status", "name": "Status", "dataType": "SINGLE_SELECT", "options": _opts("Backlog", "In Progress", "In Review", "Done")},
-        {"id": "F_prio", "name": "Priority", "dataType": "SINGLE_SELECT", "options": _opts("P0", "P1", "P2")},
-        {"id": "F_wait", "name": "Wait", "dataType": "SINGLE_SELECT", "options": _opts("W1", "W2", "W3")},
-        {"id": "F_est", "name": "Estimate", "dataType": "NUMBER"},
-        {"id": "F_carry", "name": "Carryover", "dataType": "NUMBER"},
-        {"id": "F_start", "name": "Start date", "dataType": "DATE"},
-        {"id": "F_end", "name": "End date", "dataType": "DATE"},
+        {"id": "F_status", "name": "Status", "dataType": "SINGLE_SELECT", "options": _opts("Backlog", "In progress", "In review", "Done")},
+        {"id": "F_prio", "name": "Priority", "dataType": "SINGLE_SELECT", "options": _opts("P0", "P1", "P2", "P3")},
+        {"id": "F_est", "name": est_field, "dataType": "NUMBER"},
         {"id": "F_iter", "name": "Iteration", "dataType": "ITERATION",
          "configuration": {"duration": 7, "iterations": active, "completedIterations": done}},
-    ]
+    ] + (LEGACY_FIELDS if legacy else [])
     return {"id": "PVT_x", "title": title, "shortDescription": description,
             "fields": {"nodes": fields}, "items": {"pageInfo": {"hasNextPage": False}, "nodes": [raw_item(i) for i in items]}}
 
 
 def raw_item(i):
-    """i: n, repo, state, status, week, prio, wait, est, end, carry, updated, closed, parent, children, kind"""
+    """i: n, repo, state, status, week, prio, est, est_field, updated, closed, parent, children, kind, legacy
+
+    legacy: 盤から消える項目（Wait・Carryover・Start date・End date）の値。keeper が読まんことを試すため
+    """
     repo = i.get("repo", "o/r")
     n = i["n"]
     kind = i.get("kind", "Issue")
@@ -58,18 +68,13 @@ def raw_item(i):
         fv.append({"name": i["status"], **f("Status")})
     if i.get("prio"):
         fv.append({"name": i["prio"], **f("Priority")})
-    if i.get("wait"):
-        fv.append({"name": i["wait"], **f("Wait")})
     if i.get("week"):
         fv.append({"iterationId": f"it-{i['week']}", **f("Iteration")})
     if i.get("est") is not None:
-        fv.append({"number": i["est"], **f("Estimate")})
-    if i.get("carry") is not None:
-        fv.append({"number": i["carry"], **f("Carryover")})
-    if i.get("start"):
-        fv.append({"date": i["start"], **f("Start date")})
-    if i.get("end"):
-        fv.append({"date": i["end"], **f("End date")})
+        fv.append({"number": i["est"], **f(i.get("est_field", "Story Point"))})
+    if i.get("legacy"):
+        fv += [{"name": "W1", **f("Wait")}, {"number": 3, **f("Carryover")}, {"name": "S", **f("Size")},
+               {"date": "2026-10-26", **f("Start date")}, {"date": "2026-11-01", **f("End date")}]
     if kind == "DraftIssue":
         content = {"__typename": "DraftIssue", "title": TITLE}
     elif kind == "PullRequest":
@@ -98,10 +103,11 @@ def run(tmp_path, client, *extra, board="o/1", job="all", now=NOW_MON, allow=Non
     if verified is not None:  # 反復の設定の書き直しは、測り終えた Project だけ（本番の仕組みと同じ）
         (tmp_path / "state").mkdir(parents=True, exist_ok=True)
         (tmp_path / "state" / "extend-verified.txt").write_text(verified + "\n")
-    args = (["--allow", str(allow)] if allow else ["--board", board]) + [
+    target = ["--allow", str(allow)] if allow else (["--board", board] if board else [])  # None は extra で渡す
+    args = target + [
         "--job", job, "--now", now, "--ledger-dir", str(tmp_path / "ledger"),
         "--state-dir", str(tmp_path / "state"), "--halt-file", str(tmp_path / "ledger" / "HALT"),
-        "--capacity-board", board if not allow else "o/1", *extra]
+        "--capacity-board", board if board and not allow else "o/1", *extra]
     return main(args, client=client)
 
 

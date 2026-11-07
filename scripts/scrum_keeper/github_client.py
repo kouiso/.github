@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .model import Board, Item, Iteration, parse_ts
+from .model import ESTIMATE_FIELDS, ITERATION_DAYS, Board, Item, Iteration, parse_ts
 
 
 class GhError(Exception):
@@ -50,7 +50,7 @@ BOARD_Q = """query($login:String!,$n:Int!,$after:String){repositoryOwner(login:$
   ... on ProjectV2SingleSelectField{options{id name}}
   ... on ProjectV2IterationField{configuration{duration
     iterations{id title startDate duration} completedIterations{id title startDate duration}}}}}
- items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id type
+ items(first:100,after:$after,orderBy:{field:POSITION,direction:ASC}){pageInfo{hasNextPage endCursor} nodes{id type
   content{__typename
    ... on Issue{id number state updatedAt closedAt repository{nameWithOwner}
      parent{number repository{nameWithOwner}} subIssues(first:50){nodes{number repository{nameWithOwner}}}}
@@ -58,12 +58,10 @@ BOARD_Q = """query($login:String!,$n:Int!,$after:String){repositoryOwner(login:$
   fieldValues(first:25){nodes{
    ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}
    ... on ProjectV2ItemFieldIterationValue{iterationId field{... on ProjectV2FieldCommon{name}}}
-   ... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}
-   ... on ProjectV2ItemFieldDateValue{date field{... on ProjectV2FieldCommon{name}}}}}}}}}}}"""
+   ... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}}}}}}}}}"""
 
 ITEM_FIELDS_Q = """query($id:ID!){node(id:$id){... on ProjectV2Item{fieldValues(first:25){nodes{
-  ... on ProjectV2ItemFieldIterationValue{iterationId field{... on ProjectV2FieldCommon{name}}}
-  ... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}}}}}}"""
+  ... on ProjectV2ItemFieldIterationValue{iterationId field{... on ProjectV2FieldCommon{name}}}}}}}}"""
 
 STATUS_UPDATES_Q = """query($id:ID!){node(id:$id){... on ProjectV2{statusUpdates(first:30,orderBy:{field:CREATED_AT,direction:DESC}){nodes{body}}}}}"""
 
@@ -101,10 +99,11 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
     board.iterations.sort(key=lambda i: i.start)
     if board.iterations:
         board.iteration_start = board.iterations[0].start  # 設定の startDate は読めんので最初の週で代用
-    for nd in item_nodes:
+    # item_nodes は API が返した順（頁をつないだ順）。その何番目かを盤の並び順として持つ
+    for pos, nd in enumerate(item_nodes):
         c = nd.get("content") or {}
         kind = c.get("__typename") or "DraftIssue"
-        it = Item(item_id=nd["id"], kind=kind)
+        it = Item(item_id=nd["id"], kind=kind, position=pos)
         if kind == "Issue":
             it.repo = c["repository"]["nameWithOwner"]
             it.number = c["number"]
@@ -117,6 +116,8 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
             it.children = [_key(s["repository"], s["number"]) for s in ((c.get("subIssues") or {}).get("nodes") or [])]
         elif kind == "PullRequest":
             it.number = c.get("number") or 0
+        numbers: dict[str, float] = {}
+        # 読むのは Iteration・Status・Priority・Story Point（旧 Estimate）だけ。それ以外の項目は在っても無くても見ん
         for fv in (nd.get("fieldValues") or {}).get("nodes") or []:
             fname = ((fv or {}).get("field") or {}).get("name")
             if not fname:
@@ -124,15 +125,13 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
             if "iterationId" in fv:
                 it.iteration_id = fv["iterationId"]
             elif "name" in fv:
-                {"Status": lambda v: setattr(it, "status", v), "Priority": lambda v: setattr(it, "priority", v),
-                 "Wait": lambda v: setattr(it, "wait", v)}.get(fname, lambda v: None)(fv["name"])
-            elif "number" in fv:
-                if fname == "Estimate":
-                    it.estimate = fv["number"]
-                elif fname == "Carryover":
-                    it.carryover = fv["number"]
-            elif "date" in fv and fname in ("Start date", "End date"):
-                setattr(it, "start_date" if fname == "Start date" else "end_date", dt.date.fromisoformat(fv["date"]))
+                if fname == "Status":
+                    it.status = fv["name"]
+                elif fname == "Priority":
+                    it.priority = fv["name"]
+            elif "number" in fv and fname in ESTIMATE_FIELDS:
+                numbers[fname] = fv["number"]
+        it.estimate = next((numbers[f] for f in ESTIMATE_FIELDS if f in numbers), None)
         board.items.append(it)
     return board
 
@@ -210,16 +209,14 @@ class GhClient:
             raise GhError(f"board {owner}/{number} not found")
         return node["title"] or "", node["shortDescription"] or ""
 
-    def read_item_fields(self, board: Board, item: Item) -> tuple[str | None, int]:
+    def read_item_fields(self, board: Board, item: Item) -> str | None:
+        """書く直前に読み直す今の Iteration の id。"""
         d = self._gql(ITEM_FIELDS_Q, id=item.item_id)
-        it_id, carry = None, 0
         for fv in d["data"]["node"]["fieldValues"]["nodes"]:
             fname = ((fv or {}).get("field") or {}).get("name")
             if fname == "Iteration" and "iterationId" in fv:
-                it_id = fv["iterationId"]
-            elif fname == "Carryover" and "number" in fv:
-                carry = int(fv["number"] or 0)
-        return it_id, carry
+                return fv["iterationId"]
+        return None
 
     def list_status_updates(self, board: Board) -> list[str]:
         d = self._gql(STATUS_UPDATES_Q, id=board.project_id)
@@ -251,18 +248,10 @@ class GhClient:
             after = page["pageInfo"]["endCursor"]
 
     # ---- 書き ----
-    def set_item_fields(self, board: Board, item: Item, iteration_id: str | None, carryover: int | None,
-                        start_date: dt.date | None = None, end_date: dt.date | None = None) -> None:
-        parts = []
-        if iteration_id:
-            parts.append(self._set_value("a", board, item, "Iteration", f"{{iterationId:{_lit(iteration_id)}}}"))
-        if carryover is not None:
-            parts.append(self._set_value("b", board, item, "Carryover", f"{{number:{carryover}}}"))
-        if start_date is not None:
-            parts.append(self._set_value("c", board, item, "Start date", f"{{date:{_lit(start_date.isoformat())}}}"))
-        if end_date is not None:
-            parts.append(self._set_value("d", board, item, "End date", f"{{date:{_lit(end_date.isoformat())}}}"))
-        self._gql("mutation{" + " ".join(parts) + "}")
+    def set_item_fields(self, board: Board, item: Item, iteration_id: str) -> None:
+        """書くのは Iteration だけ。"""
+        self._gql("mutation{" + self._set_value("a", board, item, "Iteration",
+                                                f"{{iterationId:{_lit(iteration_id)}}}") + "}")
 
     @staticmethod
     def _set_value(alias: str, board: Board, item: Item, fname: str, value: str) -> str:
@@ -281,7 +270,7 @@ class GhClient:
             idpart = f"id:{_lit(it.id)}," if it.id and not it.id.startswith("new:") else ""
             rows.append(f"{{{idpart}title:{_lit(it.title)},startDate:{_lit(it.start.isoformat())},duration:{it.duration}}}")
         self._gql(f'mutation{{updateProjectV2Field(input:{{fieldId:{_lit(fid)},iterationConfiguration:{{'
-                  f'startDate:{_lit(board.iteration_start.isoformat())},duration:{board.iteration_duration},'
+                  f'startDate:{_lit(board.iteration_start.isoformat())},duration:{ITERATION_DAYS},'
                   f'iterations:[{",".join(rows)}]}}}}){{projectV2Field{{... on ProjectV2IterationField{{id}}}}}}}}')
 
     def add_item_backlog(self, board: Board, content_node_id: str) -> str:
@@ -357,7 +346,7 @@ class FakeClient:
         live = self._live_item(board, item)
         if self.before_read_item:
             self.before_read_item(self._live(board), live)
-        return live.iteration_id, live.carry
+        return live.iteration_id
 
     def list_status_updates(self, board: Board) -> list[str]:
         return list(self.status_updates.get(board.ref, []))
@@ -380,18 +369,10 @@ class FakeClient:
         if self.fail_writes:
             raise GhError("injected failure")
 
-    def set_item_fields(self, board, item, iteration_id, carryover, start_date=None, end_date=None):
+    def set_item_fields(self, board, item, iteration_id):
         self._check()
-        live = self._live_item(board, item)
-        if iteration_id:
-            live.iteration_id = iteration_id
-        if carryover is not None:
-            live.carryover = carryover
-        if start_date is not None:
-            live.start_date = start_date
-        if end_date is not None:
-            live.end_date = end_date
-        self.writes.append(("item", board.ref, item.key, iteration_id, carryover, start_date, end_date))
+        self._live_item(board, item).iteration_id = iteration_id
+        self.writes.append(("item", board.ref, item.key, iteration_id))
 
     def update_iteration_config(self, board, iterations):
         self._check()
@@ -411,7 +392,7 @@ class FakeClient:
         live = self._live(board)
         repo, number = content_node_id.split("|")
         it = Item(item_id=f"PVTI_{repo}_{number}", kind="Issue", repo=repo, number=int(number), node_id=content_node_id,
-                  state="OPEN", status="Backlog")
+                  state="OPEN", status="Backlog", position=len(live.items))  # 足した物は盤の一番下
         live.items.append(it)
         self.writes.append(("add", board.ref, it.key))
         return it.item_id

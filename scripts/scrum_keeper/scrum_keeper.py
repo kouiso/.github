@@ -2,7 +2,8 @@
 """GitHub Project の週の管理を 15 分ごとに回す入口（launchd から呼ぶ）。
 
 使い方:
-  scrum_keeper.py --board <owner>/<n> --job all
+  scrum_keeper.py --board <owner>/<n> [--board <owner>/<n> ...] --job all
+  scrum_keeper.py --boards-file boards.txt --job all --halt-file <path> --ledger-dir <dir>
   scrum_keeper.py --allow <file> --job all --halt-file <path> --ledger-dir <dir>
   scrum_keeper.py --board <owner>/<n> --job carryover --dry-run      # 動かす予定を CSV で出すだけ
 終了コード: 0 正常（HALT・二重起動も 0）/ 1 gh の失敗 / 2 引数 / 4 上限かロック待ちで中断 / 5 gh の認証切れ / 6 HALT を書いて中断
@@ -20,9 +21,9 @@ import argparse
 import datetime as dt
 import fcntl
 import os
-from .github_client import FakeClient, GhClient, GhError, gh_auth_ok
-from .job import (Ctx, DEFAULT_CAPACITY, Runner, WEEKS_AHEAD, job_capacity, job_carryover, job_extend,
-                  job_fill_new_week, job_okawari, job_report, job_stalled_a, job_stalled_b, job_sync)
+from .github_client import FakeClient, GhClient, GhError, GhRateLimit, gh_auth_ok
+from .job import (Ctx, DEFAULT_CAPACITY, Runner, job_capacity, job_carryover, job_extend, job_fill_new_week,
+                  job_okawari, job_report, job_stalled_b, job_sync, window)
 from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present
 from .model import BOARD_MARKER, Board, parse_capacity, parse_now, to_jst, week_start
 
@@ -33,8 +34,10 @@ STATE_DIR_DEFAULT = Path.home() / ".local/state/scrum-keeper"
 def parse_args(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--board", help="<owner>/<number>。許可リストとマーカーを無視してこの 1 つだけ")
-    g.add_argument("--allow", help="<owner>/<number> を 1 行ずつ書いた許可リスト")
+    g.add_argument("--board", action="append",
+                   help="<owner>/<number>。何回でも書ける。許可リストとマーカーを無視して書いた物だけ")
+    g.add_argument("--boards-file", help="<owner>/<number> を 1 行ずつ書いた相手の一覧。書いた物は全部相手にする")
+    g.add_argument("--allow", help="<owner>/<number> を 1 行ずつ書いた許可リスト（説明文に scrum-board: v1 がある物だけ）")
     ap.add_argument("--job", choices=JOB_CHOICES, default="all")
     ap.add_argument("--now", help="ISO8601。週の計算は常に Asia/Tokyo")
     ap.add_argument("--dry-run", action="store_true", help="何も書かず、動かす予定を CSV で標準出力へ")
@@ -63,17 +66,39 @@ def read_allow(path: str) -> list[str]:
     return refs
 
 
-def select_boards(client, args) -> list[Board]:
-    if args.board:
-        return [client.read_board(*split_ref(args.board))]
-    boards = []
-    for ref in read_allow(args.allow):
+def board_refs(args) -> list[str]:
+    refs = args.board or read_allow(args.boards_file or args.allow)
+    for ref in refs:
+        split_ref(ref)  # 書き間違いは何も読む前に引数の誤りとして止める
+    return list(dict.fromkeys(refs))  # 同じ物を 2 度書いても 1 回だけ
+
+
+def select_boards(client, args, refs: list[str], log) -> tuple[list[Board], list[str]]:
+    """読めた Project と、読めずに飛ばした Project を返す。1 つ読めんでも残りは読む。
+
+    上限の返事は相手ごとの失敗やないので、そのまま上へ投げてこの回を止める。
+    """
+    boards, failed = [], []
+    for ref in refs:
         owner, num = split_ref(ref)
-        title, desc = client.read_board_head(owner, num)
-        if title.startswith("_") or BOARD_MARKER not in desc:
+        try:
+            if args.allow:
+                title, desc = client.read_board_head(owner, num)
+                if title.startswith("_") or BOARD_MARKER not in desc:
+                    continue
+            board = client.read_board(owner, num)
+        except GhRateLimit:
+            raise
+        except GhError as e:
+            log(f"board failed board={ref} step=read: {e}")
+            failed.append(ref)
             continue
-        boards.append(client.read_board(owner, num))
-    return boards
+        if "Iteration" not in board.field_ids:
+            log(f"board failed board={ref} step=read: no Iteration field")
+            failed.append(ref)
+            continue
+        boards.append(board)
+    return boards, failed
 
 
 def read_last_run(state_dir: Path) -> dt.datetime | None:
@@ -98,13 +123,13 @@ def due_jobs(job: str, now: dt.datetime, last_run: dt.datetime | None = None) ->
     どの仕事も二度走らせて安全。週に 1 回・日に 1 回の物は、前の成功した回（last-run）より後の最初の回で走る。
     """
     if job != "all":
-        return {"stalled": ["stalled-a", "stalled-b"]}.get(job, [job])
+        return {"stalled": ["stalled-b"]}.get(job, [job])
     new_week = last_run is None or week_start(last_run) < week_start(now)
     new_day = last_run is None or to_jst(last_run).date() < now.date()
     jobs = ["extend"]
     if new_week:
         jobs.append("capacity")
-    jobs += ["carryover", "stalled-a"]
+    jobs.append("carryover")
     if new_day:
         jobs.append("stalled-b")
     jobs += ["okawari", "sync"]
@@ -113,23 +138,56 @@ def due_jobs(job: str, now: dt.datetime, last_run: dt.datetime | None = None) ->
     return jobs
 
 
-def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str]) -> None:
-    per_board = {"carryover": job_carryover, "stalled-a": job_stalled_a, "sync": job_sync, "report": job_report}
-    eighth = ctx.monday + dt.timedelta(days=7 * (WEEKS_AHEAD - 1))
+def per_board(rn: Runner, board: Board, job: str, fn):
+    """1 つの Project の仕事。gh の失敗はその Project だけの失敗として書き残し、次の Project へ進む。
+
+    上限の返事・HALT・書き込みの上限は全部に効くので、ここでは捕まえずに上へ投げる。
+    """
+    try:
+        return fn()
+    except GhRateLimit:
+        raise
+    except GhError as e:
+        rn.log(f"board failed board={board.ref} job={job}: {e}")
+        rn.counts[(board.ref, job, "failed")] += 1
+        rn.failed = True
+        return None
+
+
+# 全 Project で 1 つの量を使う仕事。1 つでも読めん Project があると量が正しく出んので、その回は全部飛ばす
+SHARED_CAPACITY_JOBS = ("capacity", "stalled-b", "okawari", "fill-new-week")
+
+
+def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str], unread: list[str] | None = None) -> None:
+    """unread: この回に読めんかった Project。1 つでもあれば SHARED_CAPACITY_JOBS を飛ばし、残りの仕事は回す。"""
+    per_board_jobs = {"carryover": job_carryover, "sync": job_sync, "report": job_report}
+    last = window(ctx)[-1]
+
+    def shared_ok(job: str) -> bool:
+        if not unread:
+            return True
+        rn.log(f"skipped job={job}: shared capacity unknown, unread boards={','.join(unread)}")
+        rn.counts[("*", job, "skipped-unread")] += 1
+        rn.failed = True
+        return False
+
     for job in jobs:
         if job == "capacity":
-            job_capacity(rn, ctx)
+            if shared_ok(job):
+                job_capacity(rn, ctx)
         elif job == "extend":
-            filled = [b for b in ctx.boards if eighth in job_extend(rn, b, ctx)]
-            if filled:
-                job_fill_new_week(rn, ctx, eighth, filled)
+            filled = [b for b in ctx.boards if last in (per_board(rn, b, job, lambda: job_extend(rn, b, ctx)) or [])]
+            if filled and shared_ok("fill-new-week"):
+                job_fill_new_week(rn, ctx, last, filled)
         elif job == "stalled-b":
-            job_stalled_b(rn, ctx)
+            if shared_ok(job):
+                job_stalled_b(rn, ctx)
         elif job == "okawari":
-            job_okawari(rn, ctx)
+            if shared_ok(job):
+                job_okawari(rn, ctx)
         else:
             for b in ctx.boards:
-                per_board[job](rn, b, ctx)
+                per_board(rn, b, job, lambda: per_board_jobs[job](rn, b, ctx))
 
 
 def main(argv=None, client=None) -> int:
@@ -141,6 +199,14 @@ def main(argv=None, client=None) -> int:
         return 0
     if not args.dry_run and not args.ledger_dir:
         log("--ledger-dir is required unless --dry-run")
+        return 2
+    try:
+        args.refs = board_refs(args)
+    except (OSError, ValueError) as e:
+        log(f"bad board list: {e}")
+        return 2
+    if not args.refs:
+        log("no boards to run")
         return 2
     state_dir = Path(args.state_dir)
     if args.dry_run:  # 読むだけなので本番の回と並んでよい
@@ -173,7 +239,9 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
                 extend_verified=read_extend_verified(state_dir), streak_file=state_dir / "rate-limit-streak")
     try:
         ledger.check_disk()
-        boards = select_boards(client, args)
+        boards, failed = select_boards(client, args, args.refs, log)
+        if failed:
+            rn.failed = True
         cap_ref = args.capacity_board or (boards[0].ref if boards else "")
         cap_board = next((b for b in boards if b.ref == cap_ref), None)
         if cap_board:
@@ -184,8 +252,8 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         ctx = Ctx(now=now, boards=boards, capacity=cap[0] if cap else DEFAULT_CAPACITY,
                   count_from=cap[1] if cap else None, capacity_ref=cap_ref)
         jobs = due_jobs(args.job, now, read_last_run(state_dir))
-        log(f"tick boards={len(boards)} jobs={','.join(jobs)}")
-        run_jobs(rn, ctx, jobs)
+        log(f"tick boards={len(boards)} failed={len(failed)} jobs={','.join(jobs)}")
+        run_jobs(rn, ctx, jobs, failed)
     except HaltPresent:
         print("HALT")
         return 0
@@ -200,10 +268,11 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         return 1
     for key, n in sorted(rn.counts.items()):
         log(f"count board={key[0]} job={key[1]} {key[2]}={n}")
+    if args.dry_run:  # 読めた Project の分は、1 つ失敗しても出す
+        sys.stdout.write(rn.csv_text())
     if rn.failed:
         return 1
     if args.dry_run:
-        sys.stdout.write(rn.csv_text())
         return 0
     if args.job == "all":  # 手で 1 つだけ走らせた回は、週・日に 1 回の仕事の目印にせん
         (state_dir / "last-run").write_text(now.isoformat(timespec="seconds") + "\n")
