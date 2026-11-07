@@ -4,7 +4,7 @@ import json
 import re
 
 from helpers import (CUR, DESC, NOW_MON, NOW_WED, TITLE, item, ledger_lines, make_board, make_client, monday_range,
-                     run, week)
+                     raw_project, run, week)
 from scrum_keeper.github_client import FakeClient, GhClient, GhError
 from scrum_keeper.model import CAPACITY_RE
 
@@ -172,14 +172,14 @@ def test_08_stalled_b_exactly_at_limit_stays(tmp_path):
     assert moved(c) == []
 
 
-# 9. 見込み無し (b): またいだ件から下は全部動く。小さい件を詰め直さん。In Progress が先頭
+# 9. 見込み無し (b): またいだ件から盤の下は全部動く。小さい件を詰め直さん。In Progress が先頭。Priority は見ん
 def test_09_stalled_b_crossing_item_and_all_below_move(tmp_path):
     c = make_client(cap_board([
         {"n": 90, "week": CUR, "prio": "P2", "est": 20, "status": "In Progress"},
         {"n": 91, "week": CUR, "prio": "P0", "est": 20},
         {"n": 92, "week": CUR, "prio": "P0", "est": 20},   # 累計 60 > 50 ここから下
         {"n": 93, "week": CUR, "prio": "P1", "est": 5},
-        {"n": 94, "week": CUR, "prio": "P2", "est": 5},
+        {"n": 94, "week": CUR, "prio": "P0", "est": 5},   # P0 でも盤の一番下なので押し出す
     ]))
     run(tmp_path, c, job="stalled", now=NOW_WED)
     assert week(c, "o/1", 90) == CUR and week(c, "o/1", 91) == CUR
@@ -196,30 +196,50 @@ def test_10_stalled_b_top_item_over_limit_and_zero_limit(tmp_path):
     assert week(c0, "o/1", 102) == "2026-11-09"
 
 
-# 11. 並べ順は P0→P1→P2→P3→空。量は Story Point を読み、無い盤では Estimate を読む
-def test_11_priority_p3_order_and_story_point(tmp_path):
-    # 水曜は日曜まで 5 日。70 時間 ÷ 7 × 5 = 50。上から 3 件（P0・P1・P2）で 50
+# 11. 並べ順は盤の手で並べた順。Priority は見ん。量は Story Point を読み、無い盤では Estimate を読む
+def test_11_board_position_order_ignores_priority_and_story_point(tmp_path):
+    # 水曜は日曜まで 5 日。70 時間 ÷ 7 × 5 = 50。盤の上から 4 件で 32、5 件目（P0）で 52 > 50
     rows = [{"n": 113, "week": CUR, "est": 1},
             {"n": 112, "week": CUR, "prio": "P3", "est": 1},
             {"n": 111, "week": CUR, "prio": "P2", "est": 10},
             {"n": 110, "week": CUR, "prio": "P1", "est": 20},
             {"n": 114, "week": CUR, "prio": "P0", "est": 20}]
     c = make_client(cap_board(rows))
+    assert [i.position for i in c.boards["o/1"].items] == [0, 1, 2, 3, 4]
     run(tmp_path, c, job="stalled", now=NOW_WED)
-    assert [week(c, "o/1", n) for n in (114, 110, 111)] == [CUR] * 3
-    assert week(c, "o/1", 112) == "2026-11-09" and week(c, "o/1", 113) == "2026-11-09"
+    assert [week(c, "o/1", n) for n in (113, 112, 111, 110)] == [CUR] * 4
+    assert week(c, "o/1", 114) == "2026-11-09"  # P0 でも盤の一番下から押し出す
     assert c.boards["o/1"].items[3].estimate == 20  # Story Point を読んだ
     # 名前の付け替え前の盤（Estimate）も同じ量で読む
     old = make_client(cap_board([dict(r, est_field="Estimate") for r in rows], est_field="Estimate"))
     run(tmp_path / "old", old, job="stalled", now=NOW_WED)
-    assert week(old, "o/1", 111) == CUR and week(old, "o/1", 112) == "2026-11-09"
+    assert week(old, "o/1", 110) == CUR and week(old, "o/1", 114) == "2026-11-09"
+    # おかわりは来週の盤の上から引く。水曜に引ける量は 70 ÷ 7 × 4 = 40。上の P3（30）が入り、下の P0 は入らん
+    pull = make_client(cap_board([{"n": 115, "week": "2026-11-09", "prio": "P3", "est": 30},
+                                  {"n": 116, "week": "2026-11-09", "prio": "P0", "est": 30}]))
+    run(tmp_path / "pull", pull, job="okawari", now=NOW_WED)
+    assert week(pull, "o/1", 115) == CUR and week(pull, "o/1", 116) == "2026-11-09"
+    # 本物の読み取りは盤の並び順を名指しで頼み、頁をつないだ順をそのまま position にする
+    sent = []
+    pages = [raw_project([{"n": 1}, {"n": 2}]), raw_project([{"n": 3}])]
+    pages[0]["items"]["pageInfo"] = {"hasNextPage": True, "endCursor": "c1"}
+
+    class Paged(GhClient):
+        def _gql(self, query, **variables):
+            sent.append((query, variables.get("after")))
+            return {"data": {"repositoryOwner": {"projectV2": pages[len(sent) - 1]}}}
+
+    b = Paged().read_board("o", 1)
+    assert [(i.number, i.position) for i in b.items] == [(1, 0), (2, 1), (3, 2)]
+    assert [a for _, a in sent] == [None, "c1"]
+    assert "orderBy:{field:POSITION,direction:ASC}" in sent[0][0]
 
 
-# 12. extend は今週から 3 本を保ち、既存の id を残す。新しい週の題は「Iteration N」。件数が減ったら HALT
-def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
-    weeks = monday_range(n=4)  # 10-19 〜 11-09（今週から数えて 2 本）
+# 12. extend は今週と 3 週先まで（4 本）を保ち、既存の id を残す。新しい週の題は「Iteration N」。件数が減ったら HALT
+def test_12_extend_keeps_three_weeks_ahead_preserves_ids_and_halts_on_loss(tmp_path):
+    weeks = monday_range(n=5)  # 10-19 〜 11-16（今週から数えて 3 本）
     titles = {"2026-10-19": "Iteration 5", "2026-10-26": "Sprint 2026-10-26", "2026-11-09": "Iteration 2"}
-    fillers = [{"n": 130 + k, "week": w, "est": 176} for k, w in enumerate(["2026-11-02", "2026-11-09"])]
+    fillers = [{"n": 130 + k, "week": w, "est": 176} for k, w in enumerate(["2026-11-02", "2026-11-09", "2026-11-16"])]
     items = fillers + [{"n": 120, "prio": "P0", "est": 10}, {"n": 121, "prio": "P1", "est": 10}]
     mk = lambda: make_board(items, weeks=weeks, iter_titles=titles)
     c = make_client(mk())
@@ -228,10 +248,10 @@ def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
     its = c.boards["o/1"].iterations
     assert old_ids <= {i.id for i in its}
     ahead = [i for i in its if i.start >= dt.date.fromisoformat(CUR)]
-    assert [i.start.isoformat() for i in ahead] == ["2026-11-02", "2026-11-09", "2026-11-16"]
+    assert [i.start.isoformat() for i in ahead] == ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]
     new = ahead[-1]
     assert new.title == "Iteration 6" and new.duration == 7  # 終わった週の Iteration 5 も数えて次の番号
-    assert week(c, "o/1", 120) == "2026-11-16" and week(c, "o/1", 121) == "2026-11-16"
+    assert week(c, "o/1", 120) == "2026-11-23" and week(c, "o/1", 121) == "2026-11-23"
     assert week(c, "o/1", 130) == CUR
     assert run(tmp_path, c, job="extend") == 0
     assert len(c.boards["o/1"].iterations) == len(its)  # 2 回目は何も足さん
@@ -239,7 +259,7 @@ def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
     fresh = make_client(make_board([], weeks=monday_range(n=3)))
     assert run(tmp_path / "fresh", fresh, job="extend") == 0
     assert [i.title for i in fresh.boards["o/1"].iterations if i.start >= dt.date.fromisoformat(CUR)] == \
-        ["Sprint 2026-11-02", "Iteration 1", "Iteration 2"]
+        ["Sprint 2026-11-02", "Iteration 1", "Iteration 2", "Iteration 3"]
     # 早い週に空きがあるなら、先の週へ隠さず週なしのまま残す（P0 を先の週に置かん）
     roomy = make_client(make_board([{"n": 140, "prio": "P0", "est": 10}], weeks=weeks))
     assert run(tmp_path / "roomy", roomy, job="extend") == 0
@@ -260,6 +280,18 @@ def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
     bad = Lossy({"o/1": mk()})
     assert run(tmp_path / "bad", bad, job="extend") == 6
     assert (tmp_path / "bad" / "ledger" / "HALT").exists()
+
+    # 書いた後の読み直しが落ちたら、件数を確かめられんので HALT（読めんまま先へ進まん）
+    class BlindAfterWrite(FakeClient):
+        def read_board(self, owner, number):
+            if any(w[0] == "iterations" for w in self.writes):
+                raise GhError("boom after write")
+            return super().read_board(owner, number)
+
+    blind = BlindAfterWrite({"o/1": mk()})
+    assert run(tmp_path / "blind", blind, job="extend") == 6
+    assert "extend re-read failed" in (tmp_path / "blind" / "ledger" / "HALT").read_text()
+    assert not item_writes(blind)
     # 本物の書き直しの文: 既存の週は id 付き、新しい週は id 無しで 7 日
     sent = []
 
@@ -273,6 +305,29 @@ def test_12_extend_keeps_three_weeks_preserves_ids_and_halts_on_loss(tmp_path):
     Spy().update_iteration_config(b, b.iterations + [Iteration("new:2026-11-16", "Iteration 6", dt.date(2026, 11, 16))])
     assert all(f'id:"{i.id}"' in sent[0] for i in b.iterations)
     assert '{title:"Iteration 6",startDate:"2026-11-16",duration:7}' in sent[0]
+
+
+# 12b. 新しい「Iteration N」の番号は始まりの日の順に増える。後ろの週に番号付きが在る隙間の週は足さず、ログに出す
+def test_12b_gap_week_is_not_numbered_out_of_date_order(tmp_path, capsys):
+    gap = monday_range(n=4) + ["2026-11-30"]  # 11-16・11-23 が抜けとる
+    later_numbered = make_client(make_board([], weeks=gap, iter_titles={"2026-11-30": "Iteration 9"}))
+    capsys.readouterr()
+    assert run(tmp_path, later_numbered, job="extend") == 0
+    err = capsys.readouterr().err
+    assert "extend skipped board=o/1 week=2026-11-16" in err and "week=2026-11-23" in err
+    assert not later_numbered.writes  # 既存の週の題も付け替えん
+    titles = [(i.start.isoformat(), i.title) for i in later_numbered.boards["o/1"].iterations]
+    assert ("2026-11-30", "Iteration 9") in titles and len(titles) == 5
+    # 後ろの週の題が番号付きでなければ順は崩れんので足す
+    later_plain = make_client(make_board([], weeks=gap))
+    assert run(tmp_path / "plain", later_plain, job="extend") == 0
+    added = {i.start.isoformat(): i.title for i in later_plain.boards["o/1"].iterations}
+    assert added["2026-11-16"] == "Iteration 1" and added["2026-11-23"] == "Iteration 2"
+    # 番号付きが隙間より前だけなら、続きの番号で足す
+    before = make_client(make_board([], weeks=gap, iter_titles={"2026-11-09": "Iteration 4"}))
+    assert run(tmp_path / "before", before, job="extend") == 0
+    got = [i.title for i in before.boards["o/1"].iterations if i.start >= dt.date(2026, 11, 9)]
+    assert got == ["Iteration 4", "Iteration 5", "Iteration 6", "Sprint 2026-11-30"]
 
 
 # 13. 相手は allow.txt ∩ scrum-board: v1。_ で始まる題の物は触らん
@@ -418,7 +473,7 @@ def test_18_okawari_and_stalled_b_do_not_ping_pong(tmp_path):
     assert not [w for w in item_writes(c4) if w[3] == "it-2026-11-09"]  # 来週へ戻す書き込みは無い
 
 
-# 19. 1 週の量は全部の Project で 1 つ。Project ごとに量を使わず、Project をまたいで優先度の順に切る
+# 19. 1 週の量は全部の Project で 1 つ。Project ごとに量を使わず、各 Project の盤の上から交互に並べて下から切る
 def test_19_capacity_is_shared_across_boards(tmp_path):
     p2 = [{"n": 400 + k, "week": CUR, "prio": "P2", "est": 10} for k in range(17)]
     p0 = [{"n": 500 + k, "week": CUR, "prio": "P0", "est": 10} for k in range(17)]
@@ -431,11 +486,49 @@ def test_19_capacity_is_shared_across_boards(tmp_path):
     in_cur = lambda ref: [i for i in c.boards[ref].items if i.iteration_id == f"it-{CUR}"]
     total = sum(i.est for r in ("o/1", "o/2") for i in in_cur(r))
     assert total <= 6 * 176 / 7 + 1e-9
-    assert len(in_cur("o/1")) == 0 and len(in_cur("o/2")) == 15  # P0 の方が先に残る
+    # 入るのは 15 件。o/1・o/2 の上から交互に 8 件と 7 件。Priority（o/2 が P0）は見ん
+    assert [i.number for i in in_cur("o/1")] == list(range(400, 408))
+    assert [i.number for i in in_cur("o/2")] == list(range(500, 507))
     # 二度目は何も動かさん
     n = len(item_writes(c))
     ticks(tmp_path, c, ["2026-11-03T00:45+09:00"], job="stalled", allow=allow)
     assert len(item_writes(c)) == n
+
+
+# 19b. 1 つでも読めん Project があると量が分からん。量を使う仕事（capacity・stalled-b・okawari・埋め）は
+#      その回まるごと飛ばして 1 で終わる。量を使わん繰り越しは回る
+def test_19b_unread_board_skips_every_shared_capacity_job(tmp_path, capsys):
+    boards = tmp_path / "boards.txt"
+    boards.write_text("o/1\no/2\n")  # o/2 は読めん
+    over = [{"n": 1100 + k, "week": CUR, "est": 10} for k in range(20)]           # 200h。押し出す量がある
+    closed = [{"n": 1150, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 40}]  # 量を 70h に置き換える材料
+    carry = [{"n": 1160, "week": "2026-10-26"}]
+    mk = lambda: make_board(over + closed + carry, number=1)
+    c = make_client(mk())
+    capsys.readouterr()
+    assert run(tmp_path, c, "--boards-file", str(boards), board=None, job="all", now=NOW_WED) == 1
+    err = capsys.readouterr().err
+    for job in ("capacity", "stalled-b", "okawari"):
+        assert f"skipped job={job}: shared capacity unknown, unread boards=o/2" in err
+    assert [w[2] for w in item_writes(c)] == ["o/r#1160"]  # 繰り越しだけ
+    assert c.boards["o/1"].description == DESC  # 量の目印は書き換えん
+    assert not (tmp_path / "state" / "last-run").exists()
+    # 全部読めれば同じ盤で押し出しも量の置き換えも動く（上の試験が空振りでない証拠）
+    ok = make_client(mk())
+    assert run(tmp_path / "ok", ok, "--board", "o/1", board=None, job="all", now=NOW_WED) == 0
+    assert len(item_writes(ok)) > 1 and ok.boards["o/1"].description != DESC
+    # おかわり: 今週が空の盤でも、読めん盤が居れば引かん
+    empty = make_client(make_board([{"n": 1200, "week": "2026-11-09", "est": 1}], number=1, description=FUTURE_COUNT))
+    assert run(tmp_path / "e", empty, "--boards-file", str(boards), board=None, job="okawari", now=NOW_WED) == 1
+    assert not item_writes(empty)
+    # 埋め: 新しい一番先の週ができても、読めん盤が居れば埋めん（週は足す）
+    weeks = monday_range(n=5)
+    fill = make_client(make_board([{"n": 1300 + k, "week": w, "est": 176} for k, w in enumerate(weeks[2:])]
+                                  + [{"n": 1310, "est": 1}], number=1, weeks=weeks, description=FUTURE_COUNT))
+    capsys.readouterr()
+    assert run(tmp_path / "f", fill, "--boards-file", str(boards), board=None, job="extend") == 1
+    assert "skipped job=fill-new-week" in capsys.readouterr().err
+    assert [w for w in fill.writes if w[0] == "iterations"] and week(fill, "o/1", 1310) is None
 
 
 # 20. 終わった週のどこからでも繰り越す。月曜の窓を Mac が寝とっても、次の回で拾い、取りこぼしは報告に出る

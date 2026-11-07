@@ -50,7 +50,7 @@ BOARD_Q = """query($login:String!,$n:Int!,$after:String){repositoryOwner(login:$
   ... on ProjectV2SingleSelectField{options{id name}}
   ... on ProjectV2IterationField{configuration{duration
     iterations{id title startDate duration} completedIterations{id title startDate duration}}}}}
- items(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id type
+ items(first:100,after:$after,orderBy:{field:POSITION,direction:ASC}){pageInfo{hasNextPage endCursor} nodes{id type
   content{__typename
    ... on Issue{id number state updatedAt closedAt repository{nameWithOwner}
      parent{number repository{nameWithOwner}} subIssues(first:50){nodes{number repository{nameWithOwner}}}}
@@ -99,10 +99,11 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
     board.iterations.sort(key=lambda i: i.start)
     if board.iterations:
         board.iteration_start = board.iterations[0].start  # 設定の startDate は読めんので最初の週で代用
-    for nd in item_nodes:
+    # item_nodes は API が返した順（頁をつないだ順）。その何番目かを盤の並び順として持つ
+    for pos, nd in enumerate(item_nodes):
         c = nd.get("content") or {}
         kind = c.get("__typename") or "DraftIssue"
-        it = Item(item_id=nd["id"], kind=kind)
+        it = Item(item_id=nd["id"], kind=kind, position=pos)
         if kind == "Issue":
             it.repo = c["repository"]["nameWithOwner"]
             it.number = c["number"]
@@ -391,7 +392,7 @@ class FakeClient:
         live = self._live(board)
         repo, number = content_node_id.split("|")
         it = Item(item_id=f"PVTI_{repo}_{number}", kind="Issue", repo=repo, number=int(number), node_id=content_node_id,
-                  state="OPEN", status="Backlog")
+                  state="OPEN", status="Backlog", position=len(live.items))  # 足した物は盤の一番下
         live.items.append(it)
         self.writes.append(("add", board.ref, it.key))
         return it.item_id

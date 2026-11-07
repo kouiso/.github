@@ -17,7 +17,6 @@ ITER_TITLE_RE = re.compile(r"^Iteration (\d+)$")
 ITERATION_DAYS = 7  # 週は月曜始まりの 7 日
 CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)h count_from=(\d{4}-\d{2}-\d{2})")
 BOARD_MARKER = "scrum-board: v1"
-PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}  # 空は一番後ろ
 
 
 def to_jst(now: dt.datetime) -> dt.datetime:
@@ -79,6 +78,7 @@ class Item:
     iteration_id: str | None = None
     priority: str | None = None
     estimate: float | None = None  # Story Point（旧 Estimate）
+    position: int = 0  # 盤の手で並べた順（items が返る順）の何番目か。0 が一番上。何を先にやるかはこれで決める
 
     @property
     def key(self) -> str:

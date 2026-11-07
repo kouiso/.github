@@ -5,6 +5,7 @@
 
 1 週の量は全部の Project で 1 つ。stalled-b・okawari・extend の埋めは同じ「量」と同じ並べ順を使い、
 Project をまたいで 1 回で計画する（Project ごとに量を使うと、Project の数だけ量が膨らむ）。
+何を先にやるかは盤の手で並べた順で決める。週へ引く物は上から、週から押し出す物は下から。Priority は目安で並べ順に使わん。
 書くのは課題の Iteration だけ。Wait・Carryover・Start date・End date・Size は読みも書きもせん（盤から消える項目）。
 待ちは並び順と GitHub の blockedBy で表す決まりなので、ここでは待ちを見分けん。
 """
@@ -25,7 +26,7 @@ from .model import (Board, Item, Iteration, ITER_TITLE, ITER_TITLE_RE, ITERATION
                     days_to_sunday_inclusive, to_jst, week_start)
 from .ordering import EPS, order_key, overflow
 
-WEEKS_AHEAD = 3  # 今週を含めて 3 週ぶんの Iteration を先に作っておく
+WEEKS_AHEAD = 3  # 「いつも 3 週先まで用意」。今週の先に 3 週、今週を入れて 4 本の Iteration を先に作っておく
 CAP_MIN, CAP_MAX = 70.0, 282.0
 DEFAULT_CAPACITY = 176.0
 MAX_CONSECUTIVE_FAILURES = 3
@@ -63,6 +64,11 @@ class Ctx:
     @property
     def next_monday(self) -> dt.date:
         return self.monday + dt.timedelta(days=7)
+
+
+def window(ctx: Ctx) -> list[dt.date]:
+    """用意しておく週の月曜。今週と、その先の WEEKS_AHEAD 週。"""
+    return [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD + 1)]
 
 
 def limit_today(ctx: Ctx) -> float:
@@ -245,10 +251,22 @@ def workable(board: Board, week: dt.date) -> list[Item]:
 
 
 def ordered_entries(entries: list[tuple[Board, Item]], in_progress_first: bool = False) -> list[tuple[Board, Item]]:
-    """Project をまたいで 1 つの順に並べる（Priority → repo → 番号）。"""
-    key = (lambda e: (0 if e[1].is_in_progress else 1,) + order_key(e[1])) if in_progress_first \
-        else (lambda e: order_key(e[1]))
-    return sorted(entries, key=key)
+    """Project をまたいで 1 つの順に並べる。Priority は見ん。
+
+    Project の中は盤の並び順（上から）。Project どうしの上下は決まりが無いので、各 Project の上から k 番目どうしを
+    並べ（同じ k は entries に出てきた Project の順）、1 つの Project が他を全部押しのけんようにする。
+    in_progress_first: 手を付けた物（In progress）を先に置く。押し出すのは下からなので、手を付けた物が最後まで残る。
+    """
+    board_idx: dict[str, int] = {}
+    for b, _ in entries:
+        board_idx.setdefault(b.ref, len(board_idx))
+    group = (lambda i: 0 if i.is_in_progress else 1) if in_progress_first else (lambda i: 0)
+    rank: dict[int, int] = {}
+    seen: Counter = Counter()
+    for b, i in sorted(entries, key=lambda e: (group(e[1]), board_idx[e[0].ref], order_key(e[1]))):
+        rank[id(i)] = seen[(group(i), b.ref)]
+        seen[(group(i), b.ref)] += 1
+    return sorted(entries, key=lambda e: (group(e[1]), rank[id(e[1])], board_idx[e[0].ref]))
 
 
 def apply_pbi_rule(board: Board, plan: dict[str, Move]) -> dict[str, Move]:
@@ -301,20 +319,46 @@ def find_mismatches(board: Board, week: dt.date) -> list[tuple[Item, str]]:
 
 
 # ------------------------------------------------------------------ extend
+def numbered_iterations(board: Board) -> list[tuple[dt.date, int]]:
+    """「Iteration N」の題を持つ週（終わった週も含む）の (始まりの日, N)。"""
+    return [(it.start, int(m.group(1))) for it in board.iterations if (m := ITER_TITLE_RE.match(it.title or ""))]
+
+
 def next_iteration_number(board: Board) -> int:
     """「Iteration N」の題を持つ週（終わった週も含む）の一番大きい N の次。1 つも無ければ 1。"""
-    nums = [int(m.group(1)) for it in board.iterations if (m := ITER_TITLE_RE.match(it.title or ""))]
-    return max(nums, default=0) + 1
+    return max((n for _, n in numbered_iterations(board)), default=0) + 1
+
+
+def plan_new_iterations(board: Board, missing: list[dt.date]) -> tuple[list[Iteration], list[dt.date]]:
+    """足す週と、足さん週。番号は始まりの日の順に増える決まり（N は一番大きい番号の次）。
+
+    足りん週より後に「Iteration N」の週が既に在ると、新しい番号がその週より大きくなって日付の順と逆になる。
+    その週は足さん（既存の週の題も付け替えん）。
+    """
+    numbered = numbered_iterations(board)
+    nxt = next_iteration_number(board)
+    added, skipped = [], []
+    for d in sorted(missing):
+        if any(start > d for start, _ in numbered):
+            skipped.append(d)
+            continue
+        added.append(Iteration("new:" + d.isoformat(), ITER_TITLE.format(nxt), d, ITERATION_DAYS))
+        nxt += 1
+    return added, skipped
 
 
 def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
-    need = [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD)]
-    missing = [d for d in need if not board.iteration_by_start(d)]
+    missing = [d for d in window(ctx) if not board.iteration_by_start(d)]
     if not missing:
         return []
-    first = next_iteration_number(board)
-    added = [Iteration("new:" + d.isoformat(), ITER_TITLE.format(first + k), d, ITERATION_DAYS)
-             for k, d in enumerate(missing)]
+    added, skipped = plan_new_iterations(board, missing)
+    for d in skipped:
+        rn.log(f"extend skipped board={board.ref} week={d.isoformat()}: a later Iteration N exists, "
+               "a new number would break date order")
+        rn.row(board, "extend", "skip-iteration", from_week="", to_week=d.isoformat(), reason="number-order")
+        rn.counts[(board.ref, "extend", "skipped")] += 1
+    if not added:
+        return []
     full = sorted(board.iterations + added, key=lambda i: i.start)
     if not rn.dry_run:
         if not ({board.ref, "*"} & rn.extend_verified):
@@ -330,7 +374,12 @@ def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
                        lambda: rn.client.update_iteration_config(board, full))
         if not ok:
             return []
-        after = rn.client.read_board(board.owner, board.number)
+        try:
+            after = rn.client.read_board(board.owner, board.number)
+        except GhError:
+            # 書いた後に件数を確かめられん。週が消えとっても気づけんまま進むので止める（上限の返事でも同じ）
+            write_halt(rn.halt_file, "extend re-read failed, item counts unchecked")
+            raise Halted("extend re-read failed, item counts unchecked")
         counts_after = Counter(i.iteration_id for i in after.items if i.iteration_id)
         for iid, n in counts_before.items():
             if counts_after.get(iid, 0) < n:
@@ -339,20 +388,20 @@ def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
         board.iterations = after.iterations
     else:
         board.iterations = full
-    for d in missing:
-        rn.row(board, "extend", "add-iteration", from_week="", to_week=d.isoformat())
-    rn.counts[(board.ref, "extend", "added")] += len(missing)
-    return missing
+    for it in added:
+        rn.row(board, "extend", "add-iteration", from_week="", to_week=it.start.isoformat())
+    rn.counts[(board.ref, "extend", "added")] += len(added)
+    return [it.start for it in added]
 
 
 def job_fill_new_week(rn: Runner, ctx: Ctx, week: dt.date, filled: list[Board]) -> None:
-    """新しくできた一番先の週（WEEKS_AHEAD 週目）を埋める。週に入っとらん物を 1 つの順（全 Project）で、
+    """新しくできた一番先の週（今週の WEEKS_AHEAD 週先）を埋める。週に入っとらん物を盤の上から（全 Project 1 つの順）、
     量に空きがある一番早い週へ置く。
 
     置き場所が一番先の週になった物だけ書く。もっと早い週に空きがある物は触らず「週なし」のまま見える所に残す
-    （P0 を先の週に隠さんため。早い週へ置くのは board_place.py の仕事）。早い週に置く予定の物は、その週の量に数える。
+    （盤の上の物を先の週に隠さんため。早い週へ置くのは board_place.py の仕事）。早い週に置く予定の物は、その週の量に数える。
     """
-    weeks = [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD)]
+    weeks = window(ctx)
     load = {w: sum(i.est for b in ctx.boards for i in workable(b, w)) for w in weeks}
     entries = [(b, i) for b in ctx.boards for i in b.items
                if i.is_open_issue and not i.is_done and not i.iteration_id]
@@ -403,7 +452,10 @@ def job_carryover(rn: Runner, board: Board, ctx: Ctx) -> None:
 
 # ------------------------------------------------------------------ stalled
 def job_stalled_b(rn: Runner, ctx: Ctx) -> None:
-    """日曜までに入りきらん分を来週へ。量は全 Project で 1 つなので、全部を 1 つの順に並べて 1 回で切る。"""
+    """日曜までに入りきらん分を来週へ。量は全 Project で 1 つなので、全部を 1 つの順に並べて 1 回で切る。
+
+    押し出すのは盤の下から（In progress は最後まで残す）。
+    """
     movable = {b.ref for b in boards_with_weeks(ctx)}
     entries = ordered_entries([(b, i) for b in ctx.boards for i in workable(b, ctx.monday)], in_progress_first=True)
     over = {id(i) for i in overflow([i for _, i in entries], limit_today(ctx))}
@@ -419,7 +471,7 @@ def job_stalled_b(rn: Runner, ctx: Ctx) -> None:
 
 # ------------------------------------------------------------------ okawari
 def job_okawari(rn: Runner, ctx: Ctx) -> None:
-    """今週にやる物が無くなった Project へ、来週の上から。引ける量は全 Project で 1 つ。
+    """今週にやる物が無くなった Project へ、来週の盤の上から。引ける量は全 Project で 1 つ。
 
     引く量は stalled-b が翌日に押し戻さん量までにする（同じ量を両方が見る）。そうでないと引いては戻すが回り続ける。
     """

@@ -22,8 +22,8 @@ import datetime as dt
 import fcntl
 import os
 from .github_client import FakeClient, GhClient, GhError, GhRateLimit, gh_auth_ok
-from .job import (Ctx, DEFAULT_CAPACITY, Runner, WEEKS_AHEAD, job_capacity, job_carryover, job_extend,
-                  job_fill_new_week, job_okawari, job_report, job_stalled_b, job_sync)
+from .job import (Ctx, DEFAULT_CAPACITY, Runner, job_capacity, job_carryover, job_extend, job_fill_new_week,
+                  job_okawari, job_report, job_stalled_b, job_sync, window)
 from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present
 from .model import BOARD_MARKER, Board, parse_capacity, parse_now, to_jst, week_start
 
@@ -154,20 +154,37 @@ def per_board(rn: Runner, board: Board, job: str, fn):
         return None
 
 
-def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str]) -> None:
+# 全 Project で 1 つの量を使う仕事。1 つでも読めん Project があると量が正しく出んので、その回は全部飛ばす
+SHARED_CAPACITY_JOBS = ("capacity", "stalled-b", "okawari", "fill-new-week")
+
+
+def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str], unread: list[str] | None = None) -> None:
+    """unread: この回に読めんかった Project。1 つでもあれば SHARED_CAPACITY_JOBS を飛ばし、残りの仕事は回す。"""
     per_board_jobs = {"carryover": job_carryover, "sync": job_sync, "report": job_report}
-    last = ctx.monday + dt.timedelta(days=7 * (WEEKS_AHEAD - 1))
+    last = window(ctx)[-1]
+
+    def shared_ok(job: str) -> bool:
+        if not unread:
+            return True
+        rn.log(f"skipped job={job}: shared capacity unknown, unread boards={','.join(unread)}")
+        rn.counts[("*", job, "skipped-unread")] += 1
+        rn.failed = True
+        return False
+
     for job in jobs:
         if job == "capacity":
-            job_capacity(rn, ctx)
+            if shared_ok(job):
+                job_capacity(rn, ctx)
         elif job == "extend":
             filled = [b for b in ctx.boards if last in (per_board(rn, b, job, lambda: job_extend(rn, b, ctx)) or [])]
-            if filled:
+            if filled and shared_ok("fill-new-week"):
                 job_fill_new_week(rn, ctx, last, filled)
         elif job == "stalled-b":
-            job_stalled_b(rn, ctx)
+            if shared_ok(job):
+                job_stalled_b(rn, ctx)
         elif job == "okawari":
-            job_okawari(rn, ctx)
+            if shared_ok(job):
+                job_okawari(rn, ctx)
         else:
             for b in ctx.boards:
                 per_board(rn, b, job, lambda: per_board_jobs[job](rn, b, ctx))
@@ -236,7 +253,7 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
                   count_from=cap[1] if cap else None, capacity_ref=cap_ref)
         jobs = due_jobs(args.job, now, read_last_run(state_dir))
         log(f"tick boards={len(boards)} failed={len(failed)} jobs={','.join(jobs)}")
-        run_jobs(rn, ctx, jobs)
+        run_jobs(rn, ctx, jobs, failed)
     except HaltPresent:
         print("HALT")
         return 0

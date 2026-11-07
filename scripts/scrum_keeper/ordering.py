@@ -1,23 +1,17 @@
-"""課題の並べ方と、日曜までに入りきらん分の切り分け。"""
+"""課題の並べ方と、日曜までに入りきらん分の切り分け。
+
+何を先にやるかは盤の手で並べた順（Item.position）で決める。Priority は目安で、並べ順には使わん。
+"""
 from __future__ import annotations
 
-from .model import Item, PRIORITY_RANK
+from .model import Item
 
 EPS = 1e-9  # 足し算の順で出る小数の誤差で、ちょうどの件が溢れ扱いにならんように
 
 
 def order_key(item: Item):
-    pr = PRIORITY_RANK.get(item.priority or "", len(PRIORITY_RANK))
-    return (pr, item.repo, item.number)
-
-
-def sort_plain(items: list[Item]) -> list[Item]:
-    """Priority P0→P1→P2→P3→空、repo、番号の古い順。"""
-    return sorted(items, key=order_key)
-
-
-def sort_in_progress_first(items: list[Item]) -> list[Item]:
-    return sorted(items, key=lambda i: (0 if i.is_in_progress else 1,) + order_key(i))
+    """盤の上から。同じ盤の中では position は重ならんので、これだけで順が決まる。"""
+    return (item.position,)
 
 
 def overflow(ordered: list[Item], limit: float) -> list[Item]:
