@@ -9,7 +9,7 @@ from scrum_keeper.scrum_keeper import main
 
 D = dt.date
 TITLE = "SECRET-TITLE-XYZ"  # 題名は一度も出てはいかん。出たら試験が落ちる
-DESC = "scrum-board: v1 scrum-keeper:capacity=176h count_from=2026-10-26"
+DESC = "scrum-board: v1 scrum-keeper:capacity=176pt count_from=2026-10-26"
 CUR = "2026-11-02"  # 月曜
 NOW_MON = "2026-11-02T00:05+09:00"
 NOW_WED = "2026-11-04T12:00+09:00"

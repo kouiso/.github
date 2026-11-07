@@ -10,12 +10,13 @@ import re
 from dataclasses import dataclass, field
 
 JST = dt.timezone(dt.timedelta(hours=9), "JST")
-DEFAULT_ESTIMATE = 1.5  # Story Point（旧 Estimate）が空の時に足す時間
+DEFAULT_ESTIMATE = 2.0  # Story Point（旧 Estimate）が空の時に足す点。1・2・3・5・8・13 の小さい側に寄せ、付け忘れで量を食い過ぎんようにする
 ESTIMATE_FIELDS = ("Story Point", "Estimate")  # 前にある名前を先に読む。Estimate は名前の付け替えが済むまでの読み替え
 ITER_TITLE = "Iteration {}"  # GitHub の既定と同じ題。番号は終わった週も含めた一番大きい番号の次
 ITER_TITLE_RE = re.compile(r"^Iteration (\d+)$")
 ITERATION_DAYS = 7  # 週は月曜始まりの 7 日
-CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)h count_from=(\d{4}-\d{2}-\d{2})")
+# 量の目印。単位は Story Point（pt）。前の決まりの時間（h）の目印も読むが、時間の値は点に読み替えられんので使わん
+CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)(pt|h) count_from=(\d{4}-\d{2}-\d{2})")
 BOARD_MARKER = "scrum-board: v1"
 
 
@@ -149,8 +150,10 @@ class Board:
         )
 
 
-def parse_capacity(description: str) -> tuple[float, dt.date] | None:
+def parse_capacity(description: str) -> tuple[float | None, dt.date] | None:
+    """目印の量（点）と count_from。時間（h）の古い目印は量を None で返し、呼ぶ側の既定の点を使わせる。"""
     m = CAPACITY_RE.search(description or "")
     if not m:
         return None
-    return float(m.group(1)), dt.date.fromisoformat(m.group(2))
+    value = float(m.group(1)) if m.group(2) == "pt" else None
+    return value, dt.date.fromisoformat(m.group(3))

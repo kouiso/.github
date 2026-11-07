@@ -27,8 +27,12 @@ from .model import (Board, Item, Iteration, ITER_TITLE, ITER_TITLE_RE, ITERATION
 from .ordering import EPS, order_key, overflow
 
 WEEKS_AHEAD = 3  # 「いつも 3 週先まで用意」。今週の先に 3 週、今週を入れて 4 本の Iteration を先に作っておく
-CAP_MIN, CAP_MAX = 70.0, 282.0
-DEFAULT_CAPACITY = 176.0
+# 1 週の量は Story Point（1・2・3・5・8・13 の相対の大きさ）で数える。時間とは混ぜん
+VELOCITY_WEEKS = 3  # 量は前の 3 週に閉じた点の平均。1 週だけやと休みの週や一気に閉じた週で量が跳ねる
+CAP_MIN = 10.0  # 量の下限。休みが続いても量が 0 近くに潰れて、今週に何も置けんようにはせん
+# 上限は置かん。63 盤で 3 週に閉じた点は週 180〜380 点（2026-11 実測）で、決め打ちの天井は盤の数が変わると外れる。
+# 一気に閉じた週の跳ねは 3 週の平均で 3 分の 1 に薄める
+DEFAULT_CAPACITY = 20.0  # Ctx を量なしで作った時だけの値。本番の回は目印の点か、目印が使えん時は実績の点を使う
 MAX_CONSECUTIVE_FAILURES = 3
 WRITE_GAP = 1  # 書き込みの前に空ける秒数（gh_write.sh と同じ）
 BACKOFF = (60, 120, 240)  # 上限の返事の後に待つ秒数（gh_write.sh と同じ）
@@ -537,8 +541,9 @@ def job_sync(rn: Runner, board: Board, ctx: Ctx) -> None:
 
 
 # ------------------------------------------------------------------ capacity
-def closed_estimate_last_week(boards: list[Board], monday: dt.date) -> float:
-    start = dt.datetime.combine(monday - dt.timedelta(days=7), dt.time(0), tzinfo=JST)
+def closed_points(boards: list[Board], monday: dt.date, weeks: int = 1) -> float:
+    """monday の前の weeks 週に閉じた課題の Story Point の合計（空は DEFAULT_ESTIMATE）。"""
+    start = dt.datetime.combine(monday - dt.timedelta(days=7 * weeks), dt.time(0), tzinfo=JST)
     end = dt.datetime.combine(monday, dt.time(0), tzinfo=JST)
     total = 0.0
     for b in boards:
@@ -548,17 +553,23 @@ def closed_estimate_last_week(boards: list[Board], monday: dt.date) -> float:
     return total
 
 
+def velocity(boards: list[Board], monday: dt.date) -> float:
+    """前の VELOCITY_WEEKS 週の平均の点を CAP_MIN より下げずに返す。小数は切り捨てて目印を読みやすくする。"""
+    return max(CAP_MIN, float(int(closed_points(boards, monday, VELOCITY_WEEKS) / VELOCITY_WEEKS)))
+
+
 def job_capacity(rn: Runner, ctx: Ctx) -> None:
     if ctx.count_from is None or ctx.monday < ctx.count_from:
         return  # count_from より前の週は置き換えん
-    new = min(CAP_MAX, max(CAP_MIN, closed_estimate_last_week(ctx.boards, ctx.monday)))
-    if new == ctx.capacity:
-        return
+    new = velocity(ctx.boards, ctx.monday)
+    token = f"scrum-keeper:capacity={new:g}pt count_from={ctx.count_from.isoformat()}"
     target = next((b for b in ctx.boards if b.ref == ctx.capacity_ref), None)
-    if target is None or not CAPACITY_RE.search(target.description):
+    found = CAPACITY_RE.search(target.description) if target else None
+    if found and found.group(0) == token:
+        return  # 同じ量で、もう点の目印になっとる
+    if found is None:
         rn.log("capacity: board for the token is not a target, read-only")
         return  # 目印を置いた GitHub Project が今回の相手でなければ、読むだけで書かん
-    token = f"scrum-keeper:capacity={new:g}h count_from={ctx.count_from.isoformat()}"
     text = CAPACITY_RE.sub(token, target.description)
     if not rn.dry_run:
         if not rn._write("capacity", target.ref, target, {"description": target.description},

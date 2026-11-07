@@ -6,7 +6,7 @@ import re
 from helpers import (CUR, DESC, NOW_MON, NOW_WED, TITLE, item, ledger_lines, make_board, make_client, monday_range,
                      raw_project, run, week)
 from scrum_keeper.github_client import FakeClient, GhClient, GhError
-from scrum_keeper.model import CAPACITY_RE
+from scrum_keeper.model import CAPACITY_RE, parse_capacity
 
 
 def moved(client):
@@ -161,12 +161,12 @@ def test_07_legacy_fields_are_never_read_or_written(tmp_path, capsys):
 
 
 def cap_board(items, cap="70", count_from="2026-10-26", **kw):
-    return make_board(items, description=f"scrum-board: v1 scrum-keeper:capacity={cap}h count_from={count_from}", **kw)
+    return make_board(items, description=f"scrum-board: v1 scrum-keeper:capacity={cap}pt count_from={count_from}", **kw)
 
 
 # 8. 見込み無し (b): 合計がちょうど上限なら残る
 def test_08_stalled_b_exactly_at_limit_stays(tmp_path):
-    # 水曜は日曜まで 5 日。70 時間 ÷ 7 × 5 = 50
+    # 水曜は日曜まで 5 日。70 点 ÷ 7 × 5 = 50
     c = make_client(cap_board([{"n": 80, "week": CUR, "prio": "P0", "est": 25}, {"n": 81, "week": CUR, "prio": "P1", "est": 25}]))
     run(tmp_path, c, job="stalled", now=NOW_WED)
     assert moved(c) == []
@@ -198,7 +198,7 @@ def test_10_stalled_b_top_item_over_limit_and_zero_limit(tmp_path):
 
 # 11. 並べ順は盤の手で並べた順。Priority は見ん。量は Story Point を読み、無い盤では Estimate を読む
 def test_11_board_position_order_ignores_priority_and_story_point(tmp_path):
-    # 水曜は日曜まで 5 日。70 時間 ÷ 7 × 5 = 50。盤の上から 4 件で 32、5 件目（P0）で 52 > 50
+    # 水曜は日曜まで 5 日。70 点 ÷ 7 × 5 = 50。盤の上から 4 件で 32、5 件目（P0）で 52 > 50
     rows = [{"n": 113, "week": CUR, "est": 1},
             {"n": 112, "week": CUR, "prio": "P3", "est": 1},
             {"n": 111, "week": CUR, "prio": "P2", "est": 10},
@@ -375,28 +375,50 @@ def test_14_halt_and_gh_failure_leave_last_run_alone(tmp_path, capsys):
     assert (state / "last-run").read_text().strip() == "2026-11-02T00:05:00+09:00"
 
 
-# 15. capacity: 前の週に閉じた分（空は 1.5）を 70〜282 に収めて置き換え。count_from より前は置き換えん
+# 15. capacity: 前の 3 週に閉じた Story Point の平均（空は 2 点、10 点より下げん）で置き換え。count_from より前は置き換えん
 def test_15_capacity_rewrite_clamp_and_count_from(tmp_path):
     closed = [{"n": 151, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 40},
-              {"n": 152, "state": "CLOSED", "closed": "2026-10-30T01:00:00Z"},                # 空 = 1.5
+              {"n": 152, "state": "CLOSED", "closed": "2026-10-30T01:00:00Z"},                # 空 = 2 点
               {"n": 153, "state": "CLOSED", "closed": "2026-11-01T15:30:00Z", "est": 99},     # 11-02 00:30 JST は今週
-              {"n": 154, "state": "CLOSED", "closed": "2026-10-25T14:00:00Z", "est": 99}]     # 10-25 23:00 JST は先々週
+              {"n": 154, "state": "CLOSED", "closed": "2026-10-18T14:00:00Z", "est": 9},      # 10-18 23:00 JST は 3 週前
+              {"n": 157, "state": "CLOSED", "closed": "2026-10-11T14:00:00Z", "est": 99}]     # 10-11 23:00 JST は 4 週前
     c = make_client(make_board(closed))
     run(tmp_path, c, job="capacity")
-    assert c.boards["o/1"].description == "scrum-board: v1 scrum-keeper:capacity=70h count_from=2026-10-26"  # 41.5 → 70
+    # (40 + 2 + 9) ÷ 3 = 17 点。前の週 1 週ぶんの時間の数え方なら 42 → 70h になる
+    assert c.boards["o/1"].description == "scrum-board: v1 scrum-keeper:capacity=17pt count_from=2026-10-26"
+    low = make_client(make_board([{"n": 158, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 1}]))
+    run(tmp_path / "low", low, job="capacity")
+    assert "capacity=10pt" in low.boards["o/1"].description  # 0 点には潰さん
     big = make_client(make_board([{"n": 155, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 500}]))
     run(tmp_path / "big", big, job="capacity")
-    assert "capacity=282h" in big.boards["o/1"].description
+    assert "capacity=166pt" in big.boards["o/1"].description  # 上限は置かん。500 ÷ 3 の切り捨て
     early = make_client(make_board(closed, description=DESC.replace("2026-10-26", "2026-11-09")))
     run(tmp_path / "early", early, job="capacity")
     assert early.writes == []
-    same = make_client(make_board([{"n": 156, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 176}]))
+    desc20 = "scrum-board: v1 scrum-keeper:capacity=20pt count_from=2026-10-26"
+    same = make_client(make_board([{"n": 156, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 60}],
+                                  description=desc20))
     run(tmp_path / "same", same, job="capacity")
     assert same.writes == []
-    board_place_pattern = r"scrum-keeper:capacity=(\d+(?:\.\d+)?)h count_from=(\d{4}-\d{2}-\d{2})"  # board_place.py と同じ
-    assert CAPACITY_RE.pattern == board_place_pattern
-    m = re.compile(board_place_pattern).search(c.boards["o/1"].description)
-    assert m.groups() == ("70", "2026-10-26")
+    # 前の決まりの時間の目印は、同じ数でも点の目印に書き換える。時間の値は量として使わん
+    hours = make_client(make_board([{"n": 159, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 60}],
+                                   description=desc20.replace("20pt", "20h")))
+    run(tmp_path / "hours", hours, job="capacity")
+    assert hours.boards["o/1"].description == desc20
+    assert parse_capacity(desc20.replace("20pt", "176h")) == (None, dt.date(2026, 10, 26))
+    assert parse_capacity(desc20) == (20.0, dt.date(2026, 10, 26))
+    m = CAPACITY_RE.search(c.boards["o/1"].description)
+    assert m.groups() == ("17", "pt", "2026-10-26")
+
+
+# 15b. 時間の古い目印の盤は、月曜に置き換えるまでの回も前の 3 週の実績の点を量にする。時間の数は量に使わん
+def test_15b_hours_token_uses_velocity_points_until_rewritten(tmp_path):
+    closed = [{"n": 160 + k, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 35} for k in range(3)]
+    cur = [{"n": 170 + k, "week": CUR, "est": 10} for k in range(6)]
+    c = make_client(make_board(closed + cur, description=DESC.replace("176pt", "176h")))
+    run(tmp_path, c, job="stalled", now=NOW_WED)
+    # 量は 105 ÷ 3 = 35 点。水曜は 35 ÷ 7 × 5 = 25 点で、上の 2 件（20 点）だけ残る。176 を量に使うと 6 件とも残る
+    assert [week(c, "o/1", 170 + k) for k in range(6)] == [CUR] * 2 + ["2026-11-09"] * 4
 
 
 # 16. 週の報告は 1 つの Project に 1 週 1 本。題名はどこにも出ん
@@ -451,14 +473,14 @@ def item_writes(client):
 
 # 18. おかわりと見込み無し (b) は同じ量を見る。何回回しても引いては戻すが起きん
 def test_18_okawari_and_stalled_b_do_not_ping_pong(tmp_path):
-    # 今週は空、来週に 40h。量 70h。月曜 00:00〜02:45 の 12 回
+    # 今週は空、来週に 40 点。量 70 点。月曜 00:00〜02:45 の 12 回
     c = make_client(make_board(
         [{"n": 1, "week": CUR, "status": "Done"}, {"n": 2, "week": "2026-11-09", "prio": "P1", "est": 40}],
-        description=FUTURE_COUNT.replace("176h", "70h")))
+        description=FUTURE_COUNT.replace("176pt", "70pt")))
     ticks(tmp_path, c, [f"2026-11-02T{h:02d}:{m:02d}+09:00" for h in (0, 1, 2) for m in (0, 15, 30, 45)])
     assert week(c, "o/1", 2) == CUR
     assert len(item_writes(c)) == 1  # 引いたのは 1 回だけ。毎回の書き込みは無い
-    # 水曜の昼に空の今週へ 15 件(10h)の来週から引き、翌日の夜中の見込み無し (b) が押し戻さん
+    # 水曜の昼に空の今週へ 15 件(10 点)の来週から引き、翌日の夜中の見込み無し (b) が押し戻さん
     c3 = make_client(make_board([{"n": 200 + k, "week": "2026-11-09", "prio": "P1", "est": 10} for k in range(15)],
                                 description=FUTURE_COUNT))
     ticks(tmp_path / "c", c3, ["2026-11-04T12:00+09:00"])
@@ -466,7 +488,7 @@ def test_18_okawari_and_stalled_b_do_not_ping_pong(tmp_path):
     assert 0 < pulled < 15
     ticks(tmp_path / "c", c3, ["2026-11-05T00:30+09:00", "2026-11-05T01:00+09:00"])
     assert len(item_writes(c3)) == pulled
-    # 木曜に 20h を 5 件、翌金曜 00:20 に押し戻される、は起きん
+    # 木曜に 20 点を 5 件、翌金曜 00:20 に押し戻される、は起きん
     c4 = make_client(make_board([{"n": 300 + k, "week": "2026-11-09", "prio": "P1", "est": 20} for k in range(5)],
                                 description=FUTURE_COUNT))
     ticks(tmp_path / "d", c4, ["2026-11-05T12:00+09:00", "2026-11-06T00:20+09:00"])
@@ -482,7 +504,7 @@ def test_19_capacity_is_shared_across_boards(tmp_path):
     c = make_client(b1, b2)
     allow = tmp_path / "allow.txt"
     allow.write_text("o/1\no/2\n")
-    ticks(tmp_path, c, ["2026-11-03T00:30+09:00"], job="stalled", allow=allow)  # 火曜: 量 150.86h
+    ticks(tmp_path, c, ["2026-11-03T00:30+09:00"], job="stalled", allow=allow)  # 火曜: 量 150.86 点
     in_cur = lambda ref: [i for i in c.boards[ref].items if i.iteration_id == f"it-{CUR}"]
     total = sum(i.est for r in ("o/1", "o/2") for i in in_cur(r))
     assert total <= 6 * 176 / 7 + 1e-9
@@ -500,8 +522,8 @@ def test_19_capacity_is_shared_across_boards(tmp_path):
 def test_19b_unread_board_skips_every_shared_capacity_job(tmp_path, capsys):
     boards = tmp_path / "boards.txt"
     boards.write_text("o/1\no/2\n")  # o/2 は読めん
-    over = [{"n": 1100 + k, "week": CUR, "est": 10} for k in range(20)]           # 200h。押し出す量がある
-    closed = [{"n": 1150, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 40}]  # 量を 70h に置き換える材料
+    over = [{"n": 1100 + k, "week": CUR, "est": 10} for k in range(20)]           # 200 点。押し出す量がある
+    closed = [{"n": 1150, "state": "CLOSED", "closed": "2026-10-28T01:00:00Z", "est": 40}]  # 量を 13 点に置き換える材料
     carry = [{"n": 1160, "week": "2026-10-26"}]
     mk = lambda: make_board(over + closed + carry, number=1)
     c = make_client(mk())
@@ -550,7 +572,7 @@ def test_21_monday_tick_carries_then_trims_and_reports_without_wait(tmp_path):
     c = make_client(make_board(many, description=FUTURE_COUNT))
     ticks(tmp_path, c, [NOW_MON])
     weeks = [week(c, "o/1", 710 + k) for k in range(20)]
-    assert weeks.count(CUR) == 17 and weeks.count("2026-11-09") == 3  # 176h に 10h が 17 件
+    assert weeks.count(CUR) == 17 and weeks.count("2026-11-09") == 3  # 176 点に 10 点が 17 件
     body = c.status_updates["o/1"][0]
     assert "stalled-wait" not in body and "resplit" not in body and "empty-story-point=0" in body
 

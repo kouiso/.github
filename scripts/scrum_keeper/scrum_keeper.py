@@ -22,8 +22,8 @@ import datetime as dt
 import fcntl
 import os
 from .github_client import FakeClient, GhClient, GhError, GhRateLimit, gh_auth_ok
-from .job import (Ctx, DEFAULT_CAPACITY, Runner, job_capacity, job_carryover, job_extend, job_fill_new_week,
-                  job_okawari, job_report, job_stalled_b, job_sync, window)
+from .job import (Ctx, Runner, job_capacity, job_carryover, job_extend, job_fill_new_week,
+                  job_okawari, job_report, job_stalled_b, job_sync, velocity, window)
 from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present
 from .model import BOARD_MARKER, Board, parse_capacity, parse_now, to_jst, week_start
 
@@ -249,7 +249,10 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         else:
             cap_desc = client.read_board_head(*split_ref(cap_ref))[1] if cap_ref else ""
         cap = parse_capacity(cap_desc)
-        ctx = Ctx(now=now, boards=boards, capacity=cap[0] if cap else DEFAULT_CAPACITY,
+        # 点の目印が無い時（目印が無い・時間の古い目印）は、前の 3 週の実績の点をその回の量にする。
+        # 既定の小さい点を使うと、月曜に量を置き換えるまでの毎晩の見込み無しが今週の物をほぼ全部押し出すため
+        cap_points = cap[0] if cap and cap[0] is not None else velocity(boards, week_start(now))
+        ctx = Ctx(now=now, boards=boards, capacity=cap_points,
                   count_from=cap[1] if cap else None, capacity_ref=cap_ref)
         jobs = due_jobs(args.job, now, read_last_run(state_dir))
         log(f"tick boards={len(boards)} failed={len(failed)} jobs={','.join(jobs)}")
