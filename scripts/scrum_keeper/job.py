@@ -5,7 +5,9 @@
 
 1 週の量は全部の Project で 1 つ。stalled-b・okawari・extend の埋めは同じ「量」と同じ並べ順を使い、
 Project をまたいで 1 回で計画する（Project ごとに量を使うと、Project の数だけ量が膨らむ）。
-Carryover を足すのは carryover だけ。stalled と okawari は週の中の組み替えなので足さん。
+何を先にやるかは盤の手で並べた順で決める。週へ引く物は上から、週から押し出す物は下から。Priority は目安で並べ順に使わん。
+書くのは課題の Iteration だけ。Wait・Carryover・Start date・End date・Size は読みも書きもせん（盤から消える項目）。
+待ちは並び順と GitHub の blockedBy で表す決まりなので、ここでは待ちを見分けん。
 """
 from __future__ import annotations
 
@@ -20,20 +22,22 @@ from pathlib import Path
 
 from .github_client import GhError, GhRateLimit
 from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present, write_halt
-from .model import (Board, Item, Iteration, ITER_TITLE, CAPACITY_RE, JST, days_to_sunday_inclusive, to_jst,
-                    week_start)
+from .model import (Board, Item, Iteration, ITER_TITLE, ITER_TITLE_RE, ITERATION_DAYS, CAPACITY_RE, JST,
+                    days_to_sunday_inclusive, to_jst, week_start)
 from .ordering import EPS, order_key, overflow
 
-STALL_HOURS = 48
-WEEKS_AHEAD = 8
-CAP_MIN, CAP_MAX = 70.0, 282.0
-DEFAULT_CAPACITY = 176.0
+WEEKS_AHEAD = 3  # 「いつも 3 週先まで用意」。今週の先に 3 週、今週を入れて 4 本の Iteration を先に作っておく
+# 1 週の量は Story Point（1・2・3・5・8・13 の相対の大きさ）で数える。時間とは混ぜん
+VELOCITY_WEEKS = 3  # 量は前の 3 週に閉じた点の平均。1 週だけやと休みの週や一気に閉じた週で量が跳ねる
+CAP_MIN = 10.0  # 量の下限。休みが続いても量が 0 近くに潰れて、今週に何も置けんようにはせん
+# 上限は置かん。63 盤で 3 週に閉じた点は週 180〜380 点（2026-11 実測）で、決め打ちの天井は盤の数が変わると外れる。
+# 一気に閉じた週の跳ねは 3 週の平均で 3 分の 1 に薄める
+DEFAULT_CAPACITY = 20.0  # Ctx を量なしで作った時だけの値。本番の回は目印の点か、目印が使えん時は実績の点を使う
 MAX_CONSECUTIVE_FAILURES = 3
 WRITE_GAP = 1  # 書き込みの前に空ける秒数（gh_write.sh と同じ）
 BACKOFF = (60, 120, 240)  # 上限の返事の後に待つ秒数（gh_write.sh と同じ）
 RATE_LIMIT_HALT_AT = 5  # 上限の返事がこの数続いたら HALT（plan/11 自動停止 3）
-CSV_COLUMNS = ["board", "job", "action", "repo", "number", "from_week", "to_week", "carryover_from", "carryover_to",
-               "reason"]
+CSV_COLUMNS = ["board", "job", "action", "repo", "number", "from_week", "to_week", "reason"]
 
 
 def sleep_fn(seconds: float) -> None:
@@ -45,7 +49,6 @@ def sleep_fn(seconds: float) -> None:
 class Move:
     item: Item
     to_id: str
-    carry_to: int | None  # None は Carryover を書き換えん
     reason: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -65,6 +68,11 @@ class Ctx:
     @property
     def next_monday(self) -> dt.date:
         return self.monday + dt.timedelta(days=7)
+
+
+def window(ctx: Ctx) -> list[dt.date]:
+    """用意しておく週の月曜。今週と、その先の WEEKS_AHEAD 週。"""
+    return [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD + 1)]
 
 
 def limit_today(ctx: Ctx) -> float:
@@ -106,13 +114,13 @@ class Runner:
         self.writes = 0
         self.consecutive_failures = 0
         self.failed = False
+        self.shared_skipped = False  # 全 Project で分け合う仕事を、読めん Project があって飛ばした回
 
     # ---- 共通 ----
-    def row(self, board: Board, job: str, action: str, item: Item | None = None, from_week="", to_week="",
-            carry_from="", carry_to="", reason=""):
+    def row(self, board: Board, job: str, action: str, item: Item | None = None, from_week="", to_week="", reason=""):
         self.rows.append({"board": board.ref, "job": job, "action": action, "repo": item.repo if item else "",
                           "number": item.number if item else "", "from_week": from_week, "to_week": to_week,
-                          "carryover_from": carry_from, "carryover_to": carry_to, "reason": reason})
+                          "reason": reason})
 
     def csv_text(self) -> str:
         buf = io.StringIO()
@@ -208,15 +216,12 @@ class Runner:
         done = 0
         for mv in sorted(moves, key=lambda m: (m.item.repo, m.item.number)):
             item = mv.item
-            carry_from = item.carry
-            carry_to = mv.carry_to if mv.carry_to is not None else carry_from
-            if mv.to_id == item.iteration_id and carry_to == carry_from:
+            if mv.to_id == item.iteration_id:
                 continue  # 今の値と同じ書き込みはせん（毎回同じ値を書き続けて上限を食うため）
             from_it = board.iteration_by_id(item.iteration_id)
             to_it = board.iteration_by_id(mv.to_id)
-            start, end = date_changes(board, item, to_it) if mv.to_id != item.iteration_id else (None, None)
             if not self.dry_run:
-                snapshot = (item.iteration_id, item.carry)
+                snapshot = item.iteration_id
                 try:
                     live = self.client.read_item_fields(board, item)
                 except GhRateLimit:
@@ -225,71 +230,48 @@ class Runner:
                 except GhError:
                     self._fail()
                     continue
-                if tuple(live) != snapshot:
+                if live != snapshot:
                     self.log(f"race board={board.ref} job={job}")
                     self.counts[(board.ref, job, "race")] += 1
                     continue
-                ok = self._write(job, item.key, board, {"Iteration": item.iteration_id, "Carryover": carry_from,
-                                                        "Start date": str(item.start_date or ""),
-                                                        "End date": str(item.end_date or "")},
-                                 lambda: self.client.set_item_fields(board, item, mv.to_id, mv.carry_to, start, end),
-                                 mv.extra)
+                ok = self._write(job, item.key, board, {"Iteration": item.iteration_id},
+                                 lambda: self.client.set_item_fields(board, item, mv.to_id), mv.extra)
                 if not ok:
                     continue
             self.row(board, job, "move", item, from_it.start.isoformat() if from_it else "",
-                     to_it.start.isoformat() if to_it else mv.to_id.removeprefix("new:"), carry_from, carry_to, mv.reason)
+                     to_it.start.isoformat() if to_it else mv.to_id.removeprefix("new:"), mv.reason)
             item.iteration_id = mv.to_id
-            if mv.carry_to is not None:
-                item.carryover = mv.carry_to
-            if start is not None:
-                item.start_date = start
-            if end is not None:
-                item.end_date = end
             self.counts[(board.ref, job, "moved")] += 1
             done += 1
         return done
 
 
-def date_changes(board: Board, item: Item, to_it: Iteration | None) -> tuple[dt.date | None, dt.date | None]:
-    """週を動かす時に Start/End date も同じ書き込みで直す（board_place.py と同じ組）。
-
-    Start＝その週の月曜、End＝その週の日曜。End が動かす先の週の中に既にあれば（期日を言われた物）残す。
-    その Project に項目が無ければ書かん。
-    """
-    if to_it is None:
-        return None, None
-    start = to_it.start if "Start date" in board.field_ids and item.start_date != to_it.start else None
-    keep = item.end_date is not None and to_it.start <= item.end_date <= to_it.end
-    end = to_it.end if "End date" in board.field_ids and not keep else None
-    return start, end
-
-
 # ------------------------------------------------------------------ 共通の計画部品
-def carry_to(item: Item, source_start: dt.date, count_from: dt.date | None) -> int | None:
-    """Carryover に 1 を足す値。count_from より前の週から動かす時は足さん（None）。"""
-    if count_from is not None and source_start >= count_from:
-        return item.carry + 1
-    return None
-
-
-def open_work(board: Board, week: dt.date) -> list[Item]:
-    """その週に居る open で Done でない課題（Wait も含む）。"""
+def workable(board: Board, week: dt.date) -> list[Item]:
+    """その週に居る open で Done でない課題。量の数えも、おかわりの「空」の判定もこれ 1 つ。"""
     it = board.iteration_by_start(week)
     if not it:
         return []
     return [i for i in board.items if i.is_open_issue and not i.is_done and i.iteration_id == it.id]
 
 
-def workable(board: Board, week: dt.date) -> list[Item]:
-    """その週で今やれる物（Wait の付いた物は除く）。量の数えも、おかわりの「空」の判定もこれ 1 つ。"""
-    return [i for i in open_work(board, week) if not i.wait]
-
-
 def ordered_entries(entries: list[tuple[Board, Item]], in_progress_first: bool = False) -> list[tuple[Board, Item]]:
-    """Project をまたいで 1 つの順に並べる（Priority → End date → repo → 番号）。"""
-    key = (lambda e: (0 if e[1].status == "In Progress" else 1,) + order_key(e[1])) if in_progress_first \
-        else (lambda e: order_key(e[1]))
-    return sorted(entries, key=key)
+    """Project をまたいで 1 つの順に並べる。Priority は見ん。
+
+    Project の中は盤の並び順（上から）。Project どうしの上下は決まりが無いので、各 Project の上から k 番目どうしを
+    並べ（同じ k は entries に出てきた Project の順）、1 つの Project が他を全部押しのけんようにする。
+    in_progress_first: 手を付けた物（In progress）を先に置く。押し出すのは下からなので、手を付けた物が最後まで残る。
+    """
+    board_idx: dict[str, int] = {}
+    for b, _ in entries:
+        board_idx.setdefault(b.ref, len(board_idx))
+    group = (lambda i: 0 if i.is_in_progress else 1) if in_progress_first else (lambda i: 0)
+    rank: dict[int, int] = {}
+    seen: Counter = Counter()
+    for b, i in sorted(entries, key=lambda e: (group(e[1]), board_idx[e[0].ref], order_key(e[1]))):
+        rank[id(i)] = seen[(group(i), b.ref)]
+        seen[(group(i), b.ref)] += 1
+    return sorted(entries, key=lambda e: (group(e[1]), rank[id(e[1])], board_idx[e[0].ref]))
 
 
 def apply_pbi_rule(board: Board, plan: dict[str, Move]) -> dict[str, Move]:
@@ -313,11 +295,10 @@ def apply_pbi_rule(board: Board, plan: dict[str, Move]) -> dict[str, Move]:
         latest = max(starts)[1]
         if latest == eff(pbi):
             continue
-        carry = plan[pbi.key].carry_to if pbi.key in plan else None
-        if latest == pbi.iteration_id and carry is None:
+        if latest == pbi.iteration_id:
             plan.pop(pbi.key, None)  # 子の一番遅い週は親が今居る週。動かす理由が無い
             continue
-        plan[pbi.key] = Move(pbi, latest, carry, "latest-child-week")
+        plan[pbi.key] = Move(pbi, latest, "latest-child-week")
     return plan
 
 
@@ -343,20 +324,60 @@ def find_mismatches(board: Board, week: dt.date) -> list[tuple[Item, str]]:
 
 
 # ------------------------------------------------------------------ extend
+def numbered_iterations(board: Board) -> list[tuple[dt.date, int]]:
+    """「Iteration N」の題を持つ週（終わった週も含む）の (始まりの日, N)。"""
+    return [(it.start, int(m.group(1))) for it in board.iterations if (m := ITER_TITLE_RE.match(it.title or ""))]
+
+
+def next_iteration_number(board: Board) -> int:
+    """「Iteration N」の題を持つ週（終わった週も含む）の一番大きい N の次。1 つも無ければ 1。"""
+    return max((n for _, n in numbered_iterations(board)), default=0) + 1
+
+
+def plan_new_iterations(board: Board, missing: list[dt.date]) -> tuple[list[Iteration], list[dt.date]]:
+    """足す週と、足さん週。番号は始まりの日の順に増える決まり（N は一番大きい番号の次）。
+
+    足りん週より後に「Iteration N」の週が既に在ると、新しい番号がその週より大きくなって日付の順と逆になる。
+    その週は足さん（既存の週の題も付け替えん）。
+    """
+    numbered = numbered_iterations(board)
+    nxt = next_iteration_number(board)
+    added, skipped = [], []
+    for d in sorted(missing):
+        if any(start > d for start, _ in numbered):
+            skipped.append(d)
+            continue
+        added.append(Iteration("new:" + d.isoformat(), ITER_TITLE.format(nxt), d, ITERATION_DAYS))
+        nxt += 1
+    return added, skipped
+
+
 def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
-    need = [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD)]
-    missing = [d for d in need if not board.iteration_by_start(d)]
+    missing = [d for d in window(ctx) if not board.iteration_by_start(d)]
     if not missing:
         return []
-    added = [Iteration("new:" + d.isoformat(), ITER_TITLE.format(d.isoformat()), d, board.iteration_duration)
-             for d in missing]
+    added, skipped = plan_new_iterations(board, missing)
+    for d in skipped:
+        rn.log(f"extend skipped board={board.ref} week={d.isoformat()}: a later Iteration N exists, "
+               "a new number would break date order")
+        rn.row(board, "extend", "skip-iteration", from_week="", to_week=d.isoformat(), reason="number-order")
+        rn.counts[(board.ref, "extend", "skipped")] += 1
+    if not added:
+        return []
     full = sorted(board.iterations + added, key=lambda i: i.start)
     if not rn.dry_run:
+        blocked = None
         if not ({board.ref, "*"} & rn.extend_verified):
             # 反復の設定を丸ごと書き直す呼び出しが id を保つかは、試しの写しで測るまで分からん（保たんと全件の週が消える）
-            rn.log(f"extend blocked board={board.ref}: not listed in extend-verified.txt")
+            blocked = "not listed in extend-verified.txt"
+        elif not board.iteration_start:
+            # 週が 1 つも無い盤は設定の始まりの日が読めん。書かずに飛ばす（人が最初の週を作る）
+            blocked = "no iteration to start from"
+        if blocked:
+            # 前提が揃ってないだけで gh の失敗やない。回の失敗にすると last-run が進まず、日・週に 1 回の仕事が毎回走る
+            rn.log(f"extend blocked board={board.ref}: {blocked}")
+            rn.row(board, "extend", "blocked", from_week="", to_week="", reason=blocked)
             rn.counts[(board.ref, "extend", "blocked")] += 1
-            rn.failed = True
             return []
         before = rn.client.read_board(board.owner, board.number)
         counts_before = Counter(i.iteration_id for i in before.items if i.iteration_id)
@@ -365,7 +386,12 @@ def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
                        lambda: rn.client.update_iteration_config(board, full))
         if not ok:
             return []
-        after = rn.client.read_board(board.owner, board.number)
+        try:
+            after = rn.client.read_board(board.owner, board.number)
+        except GhError:
+            # 書いた後に件数を確かめられん。週が消えとっても気づけんまま進むので止める（上限の返事でも同じ）
+            write_halt(rn.halt_file, "extend re-read failed, item counts unchecked")
+            raise Halted("extend re-read failed, item counts unchecked")
         counts_after = Counter(i.iteration_id for i in after.items if i.iteration_id)
         for iid, n in counts_before.items():
             if counts_after.get(iid, 0) < n:
@@ -374,22 +400,23 @@ def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
         board.iterations = after.iterations
     else:
         board.iterations = full
-    for d in missing:
-        rn.row(board, "extend", "add-iteration", from_week="", to_week=d.isoformat())
-    rn.counts[(board.ref, "extend", "added")] += len(missing)
-    return missing
+    for it in added:
+        rn.row(board, "extend", "add-iteration", from_week="", to_week=it.start.isoformat())
+    rn.counts[(board.ref, "extend", "added")] += len(added)
+    return [it.start for it in added]
 
 
 def job_fill_new_week(rn: Runner, ctx: Ctx, week: dt.date, filled: list[Board]) -> None:
-    """新しくできた 8 週目を埋める。週に入っとらん物を 1 つの順（全 Project）で、量に空きがある一番早い週へ置く。
+    """新しくできた一番先の週（今週の WEEKS_AHEAD 週先）を埋める。週に入っとらん物を盤の上から（全 Project 1 つの順）、
+    量に空きがある一番早い週へ置く。
 
-    置き場所が 8 週目になった物だけ書く。もっと早い週に空きがある物は触らず「週なし」のまま見える所に残す
-    （P0 を 7 週先に隠さんため。早い週へ置くのは board_place.py の仕事）。早い週に置く予定の物は、その週の量に数える。
+    置き場所が一番先の週になった物だけ書く。もっと早い週に空きがある物は触らず「週なし」のまま見える所に残す
+    （盤の上の物を先の週に隠さんため。早い週へ置くのは board_place.py の仕事）。早い週に置く予定の物は、その週の量に数える。
     """
-    weeks = [ctx.monday + dt.timedelta(days=7 * k) for k in range(WEEKS_AHEAD)]
+    weeks = window(ctx)
     load = {w: sum(i.est for b in ctx.boards for i in workable(b, w)) for w in weeks}
     entries = [(b, i) for b in ctx.boards for i in b.items
-               if i.is_open_issue and not i.is_done and not i.wait and not i.iteration_id]
+               if i.is_open_issue and not i.is_done and not i.iteration_id]
     plans: dict[str, dict[str, Move]] = {}
     placed: set[tuple[str, str]] = set()
     for b, c in ordered_entries(entries):
@@ -406,7 +433,7 @@ def job_fill_new_week(rn: Runner, ctx: Ctx, week: dt.date, filled: list[Board]) 
         target = b.iteration_by_start(week) if slot == week and b in filled else None
         if target:
             for g in group:
-                plans.setdefault(b.ref, {})[g.key] = Move(g, target.id, None, "fill-new-week")
+                plans.setdefault(b.ref, {})[g.key] = Move(g, target.id, "fill-new-week")
     for b in ctx.boards:
         if b.ref in plans:
             rn.execute_moves(b, "extend", list(apply_pbi_rule(b, plans[b.ref]).values()))
@@ -414,7 +441,10 @@ def job_fill_new_week(rn: Runner, ctx: Ctx, week: dt.date, filled: list[Board]) 
 
 # ------------------------------------------------------------------ carryover
 def job_carryover(rn: Runner, board: Board, ctx: Ctx) -> None:
-    """終わった週に残る open で Done でない物を今週へ。どの終わった週からでも（Mac が止まっとった週も拾う）。"""
+    """終わった週に残る open で Done でない物を今週へ。どの終わった週からでも（Mac が止まっとった週も拾う）。
+
+    繰り越した回数は数えん（Carryover の項目は使わん）。
+    """
     dst = board.iteration_by_start(ctx.monday)
     if not dst:
         return
@@ -424,7 +454,7 @@ def job_carryover(rn: Runner, board: Board, ctx: Ctx) -> None:
         if i.kind != "Issue" or i.iteration_id not in ended:
             continue
         if i.state == "OPEN" and not i.is_done:
-            plan[i.key] = Move(i, dst.id, carry_to(i, ended[i.iteration_id].start, ctx.count_from), "ended-week-open")
+            plan[i.key] = Move(i, dst.id, "ended-week-open")
     prev = ctx.monday - dt.timedelta(days=7)
     for i, why in find_mismatches(board, prev):
         rn.row(board, "carryover", "mismatch", i, prev.isoformat(), "", reason=why)
@@ -433,22 +463,11 @@ def job_carryover(rn: Runner, board: Board, ctx: Ctx) -> None:
 
 
 # ------------------------------------------------------------------ stalled
-def job_stalled_a(rn: Runner, board: Board, ctx: Ctx) -> None:
-    cur, nxt = board.iteration_by_start(ctx.monday), board.iteration_by_start(ctx.next_monday)
-    if not cur or not nxt:
-        return
-    limit = dt.timedelta(hours=STALL_HOURS)
-    plan: dict[str, Move] = {}
-    for i in board.items:
-        if not (i.is_open_issue and i.iteration_id == cur.id and i.wait and i.updated_at):
-            continue
-        if ctx.now - to_jst(i.updated_at) > limit:
-            plan[i.key] = Move(i, nxt.id, None, "wait-48h", {"wait": i.wait})
-    rn.execute_moves(board, "stalled-a", list(apply_pbi_rule(board, plan).values()))
-
-
 def job_stalled_b(rn: Runner, ctx: Ctx) -> None:
-    """日曜までに入りきらん分を来週へ。量は全 Project で 1 つなので、全部を 1 つの順に並べて 1 回で切る。"""
+    """日曜までに入りきらん分を来週へ。量は全 Project で 1 つなので、全部を 1 つの順に並べて 1 回で切る。
+
+    押し出すのは盤の下から（In progress は最後まで残す）。
+    """
     movable = {b.ref for b in boards_with_weeks(ctx)}
     entries = ordered_entries([(b, i) for b in ctx.boards for i in workable(b, ctx.monday)], in_progress_first=True)
     over = {id(i) for i in overflow([i for _, i in entries], limit_today(ctx))}
@@ -456,7 +475,7 @@ def job_stalled_b(rn: Runner, ctx: Ctx) -> None:
     for b, i in entries:
         if id(i) in over and b.ref in movable:
             nxt = b.iteration_by_start(ctx.next_monday)
-            plans.setdefault(b.ref, {})[i.key] = Move(i, nxt.id, None, "over-capacity")
+            plans.setdefault(b.ref, {})[i.key] = Move(i, nxt.id, "over-capacity")
     for b in ctx.boards:
         if b.ref in plans:
             rn.execute_moves(b, "stalled-b", list(apply_pbi_rule(b, plans[b.ref]).values()))
@@ -464,7 +483,7 @@ def job_stalled_b(rn: Runner, ctx: Ctx) -> None:
 
 # ------------------------------------------------------------------ okawari
 def job_okawari(rn: Runner, ctx: Ctx) -> None:
-    """今週にやる物が無くなった Project へ、来週の上から。引ける量は全 Project で 1 つ。
+    """今週にやる物が無くなった Project へ、来週の盤の上から。引ける量は全 Project で 1 つ。
 
     引く量は stalled-b が翌日に押し戻さん量までにする（同じ量を両方が見る）。そうでないと引いては戻すが回り続ける。
     """
@@ -475,8 +494,7 @@ def job_okawari(rn: Runner, ctx: Ctx) -> None:
     limit = limit_okawari(ctx)
     budget = limit - sum(i.est for b in ctx.boards for i in workable(b, cur_w))
     entries = [(b, i) for b in eligible for i in b.items
-               if i.is_open_issue and not i.is_done and not i.wait
-               and i.iteration_id == b.iteration_by_start(nxt_w).id]
+               if i.is_open_issue and not i.is_done and i.iteration_id == b.iteration_by_start(nxt_w).id]
     plans: dict[str, dict[str, Move]] = {}
     total = 0.0
     for b, c in ordered_entries(entries):
@@ -485,10 +503,8 @@ def job_okawari(rn: Runner, ctx: Ctx) -> None:
             continue
         issues = {i.key: i for i in b.items if i.kind == "Issue"}
         kids = [issues[k] for k in c.children if k in issues and issues[k].is_open_issue and not issues[k].is_done]
-        # 待ちの子が居る親は動かさん（親の週は子の一番遅い週で、待ちの子は来週に残るため）。待ちの子も引かん
-        members = [k for k in kids if not k.wait] if any(k.wait for k in kids) else [c] + kids
         cur = b.iteration_by_start(cur_w)
-        group = [g for g in members if g.key not in plan and g.iteration_id != cur.id]
+        group = [g for g in [c] + kids if g.key not in plan and g.iteration_id != cur.id]
         if not group:
             continue
         est = sum(g.est for g in group)
@@ -498,7 +514,7 @@ def job_okawari(rn: Runner, ctx: Ctx) -> None:
             break
         total += est
         for g in group:
-            plan[g.key] = Move(g, cur.id, None, "okawari")
+            plan[g.key] = Move(g, cur.id, "okawari")
     for b in ctx.boards:
         if plans.get(b.ref):
             rn.execute_moves(b, "okawari", list(apply_pbi_rule(b, plans[b.ref]).values()))
@@ -533,8 +549,9 @@ def job_sync(rn: Runner, board: Board, ctx: Ctx) -> None:
 
 
 # ------------------------------------------------------------------ capacity
-def closed_estimate_last_week(boards: list[Board], monday: dt.date) -> float:
-    start = dt.datetime.combine(monday - dt.timedelta(days=7), dt.time(0), tzinfo=JST)
+def closed_points(boards: list[Board], monday: dt.date, weeks: int = 1) -> float:
+    """monday の前の weeks 週に閉じた課題の Story Point の合計（空は DEFAULT_ESTIMATE）。"""
+    start = dt.datetime.combine(monday - dt.timedelta(days=7 * weeks), dt.time(0), tzinfo=JST)
     end = dt.datetime.combine(monday, dt.time(0), tzinfo=JST)
     total = 0.0
     for b in boards:
@@ -544,17 +561,23 @@ def closed_estimate_last_week(boards: list[Board], monday: dt.date) -> float:
     return total
 
 
+def velocity(boards: list[Board], monday: dt.date) -> float:
+    """前の VELOCITY_WEEKS 週の平均の点を CAP_MIN より下げずに返す。小数は切り捨てて目印を読みやすくする。"""
+    return max(CAP_MIN, float(int(closed_points(boards, monday, VELOCITY_WEEKS) / VELOCITY_WEEKS)))
+
+
 def job_capacity(rn: Runner, ctx: Ctx) -> None:
     if ctx.count_from is None or ctx.monday < ctx.count_from:
         return  # count_from より前の週は置き換えん
-    new = min(CAP_MAX, max(CAP_MIN, closed_estimate_last_week(ctx.boards, ctx.monday)))
-    if new == ctx.capacity:
-        return
+    new = velocity(ctx.boards, ctx.monday)
+    token = f"scrum-keeper:capacity={new:g}pt count_from={ctx.count_from.isoformat()}"
     target = next((b for b in ctx.boards if b.ref == ctx.capacity_ref), None)
-    if target is None or not CAPACITY_RE.search(target.description):
+    found = CAPACITY_RE.search(target.description) if target else None
+    if found and found.group(0) == token:
+        return  # 同じ量で、もう点の目印になっとる
+    if found is None:
         rn.log("capacity: board for the token is not a target, read-only")
         return  # 目印を置いた GitHub Project が今回の相手でなければ、読むだけで書かん
-    token = f"scrum-keeper:capacity={new:g}h count_from={ctx.count_from.isoformat()}"
     text = CAPACITY_RE.sub(token, target.description)
     if not rn.dry_run:
         if not rn._write("capacity", target.ref, target, {"description": target.description},
@@ -576,20 +599,16 @@ def report_body(rn: Runner, board: Board, ctx: Ctx) -> tuple[str, int]:
     rec = lambda job: rn.ledger.records(job, board.ref, since, until)
     closed = [i for i in board.items if i.kind == "Issue" and i.state == "CLOSED" and i.closed_at
               and since <= to_jst(i.closed_at) < dt.datetime.combine(monday, dt.time(0), tzinfo=tz)]
-    waits = Counter(r.get("wait", "") for r in rec("stalled-a"))
     cur = board.iteration_by_start(monday)
     empty_est = sum(1 for i in board.items if i.is_open_issue and cur and i.iteration_id == cur.id
                     and i.estimate is None)
-    resplit = sorted(i.key for i in board.items if i.is_open_issue and i.carry >= 2)
     mism = find_mismatches(board, prev)
     ended_ids = {it.id for it in board.iterations if it.end < monday}
     stranded = sum(1 for i in board.items if i.is_open_issue and not i.is_done and i.iteration_id in ended_ids)
     lines = [f"scrum-keeper:week={monday.isoformat()}",
              f"closed={len(closed)} carried={len(rec('carryover'))} "
-             f"stalled={len(rec('stalled-a')) + len(rec('stalled-b'))} okawari={len(rec('okawari'))}",
-             "stalled-wait: " + (" ".join(f"{k}={v}" for k, v in sorted(waits.items())) or "none"),
-             f"resplit-candidates(carryover>=2): {len(resplit)}" + (" " + ", ".join(resplit[:20]) if resplit else ""),
-             f"mismatch={len(mism)} stranded={stranded} empty-estimate={empty_est}"]
+             f"stalled={len(rec('stalled-b'))} okawari={len(rec('okawari'))}",
+             f"mismatch={len(mism)} stranded={stranded} empty-story-point={empty_est}"]
     return "\n".join(lines), len(mism) + stranded
 
 

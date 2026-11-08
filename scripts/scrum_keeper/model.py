@@ -10,11 +10,14 @@ import re
 from dataclasses import dataclass, field
 
 JST = dt.timezone(dt.timedelta(hours=9), "JST")
-DEFAULT_ESTIMATE = 1.5  # Estimate が空の時に足す時間
-ITER_TITLE = "Sprint {}"
-CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)h count_from=(\d{4}-\d{2}-\d{2})")
+DEFAULT_ESTIMATE = 2.0  # Story Point（旧 Estimate）が空の時に足す点。1・2・3・5・8・13 の小さい側に寄せ、付け忘れで量を食い過ぎんようにする
+ESTIMATE_FIELDS = ("Story Point", "Estimate")  # 前にある名前を先に読む。Estimate は名前の付け替えが済むまでの読み替え
+ITER_TITLE = "Iteration {}"  # GitHub の既定と同じ題。番号は終わった週も含めた一番大きい番号の次
+ITER_TITLE_RE = re.compile(r"^Iteration (\d+)$")
+ITERATION_DAYS = 7  # 週は月曜始まりの 7 日
+# 量の目印。単位は Story Point（pt）。前の決まりの時間（h）の目印も読むが、時間の値は点に読み替えられんので使わん
+CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)(pt|h) count_from=(\d{4}-\d{2}-\d{2})")
 BOARD_MARKER = "scrum-board: v1"
-PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
 
 
 def to_jst(now: dt.datetime) -> dt.datetime:
@@ -75,11 +78,8 @@ class Item:
     status: str | None = None
     iteration_id: str | None = None
     priority: str | None = None
-    estimate: float | None = None
-    start_date: dt.date | None = None
-    end_date: dt.date | None = None
-    wait: str | None = None
-    carryover: float | None = None
+    estimate: float | None = None  # Story Point（旧 Estimate）
+    position: int = 0  # 盤の手で並べた順（items が返る順）の何番目か。0 が一番上。何を先にやるかはこれで決める
 
     @property
     def key(self) -> str:
@@ -94,12 +94,12 @@ class Item:
         return self.status == "Done"
 
     @property
-    def est(self) -> float:
-        return DEFAULT_ESTIMATE if self.estimate is None else float(self.estimate)
+    def is_in_progress(self) -> bool:
+        return (self.status or "").casefold() == "in progress"  # 盤によって In Progress と In progress がある
 
     @property
-    def carry(self) -> int:
-        return int(self.carryover or 0)
+    def est(self) -> float:
+        return DEFAULT_ESTIMATE if self.estimate is None else float(self.estimate)
 
 
 @dataclass
@@ -150,8 +150,10 @@ class Board:
         )
 
 
-def parse_capacity(description: str) -> tuple[float, dt.date] | None:
+def parse_capacity(description: str) -> tuple[float | None, dt.date] | None:
+    """目印の量（点）と count_from。時間（h）の古い目印は量を None で返し、呼ぶ側の既定の点を使わせる。"""
     m = CAPACITY_RE.search(description or "")
     if not m:
         return None
-    return float(m.group(1)), dt.date.fromisoformat(m.group(2))
+    value = float(m.group(1)) if m.group(2) == "pt" else None
+    return value, dt.date.fromisoformat(m.group(3))
