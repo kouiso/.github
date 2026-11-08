@@ -673,6 +673,10 @@ def test_25_many_boards_and_one_failure_does_not_stop_others(tmp_path, capsys):
     capsys.readouterr()
     assert run(tmp_path / "f", c3, "--board", "o/3", job="sync") == 1
     assert "board failed board=o/1 job=sync: boom" in capsys.readouterr().err
+    # 1 つの Project の仕事が落ちても、読めた回なら last-run は進める（日・週に 1 回の仕事を 15 分ごとに回さん）
+    c4 = FlakySync({"o/1": make_board([], number=1)}, repos)
+    assert run(tmp_path / "f4", c4, job="all") == 1
+    assert (tmp_path / "f4" / "state" / "last-run").exists()
     assert [w[2] for w in c3.writes if w[0] == "add"] == ["o/r3#5"]
     # 一覧のファイルが無い・書き間違いは引数の誤り
     assert run(tmp_path / "x", c, "--boards-file", str(tmp_path / "none.txt"), board=None, job="carryover") == 2
@@ -739,6 +743,7 @@ def test_28_null_nodes_do_not_crash_the_tick(tmp_path, capsys):
     node = raw_project([{"n": 1, "week": CUR}, {"n": 2, "week": CUR}])
     node["items"]["nodes"][0]["content"]["repository"] = None   # 消えた・見えん repo の課題
     node["items"]["nodes"][1]["content"]["subIssues"]["nodes"] = [None, {"number": 3, "repository": None}]
+    node["items"]["nodes"].insert(1, None)                       # 読んどる間に消えた課題
     b = parse_board(node, "o", 1, node["items"]["nodes"])
     assert [i.number for i in b.items if i.kind == "Issue"] == [2]
     assert b.items[0].children == []

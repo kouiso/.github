@@ -108,6 +108,8 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
         board.iteration_start = board.iterations[0].start  # 設定の startDate は読めんので最初の週で代用
     # item_nodes は API が返した順（頁をつないだ順）。その何番目かを盤の並び順として持つ
     for pos, nd in enumerate(item_nodes):
+        if not nd:
+            continue  # 読んどる間に消えた課題は null で返る
         c = nd.get("content") or {}
         kind = c.get("__typename") or "DraftIssue"
         it = Item(item_id=nd["id"], kind=kind, position=pos)
@@ -247,7 +249,9 @@ class GhClient:
             page = ((d.get("data") or {}).get("repositoryOwner") or {}).get("repositories")
             if not page:
                 raise GhError(f"owner {board.owner} not found")
-            for r in page["nodes"]:
+            for r in page.get("nodes") or []:
+                if not r:
+                    continue
                 text = (r.get("object") or {}).get("text") or ""
                 tgt = parse_yml_target(text)
                 if tgt and tgt[0].lower() == board.owner.lower() and tgt[1] == board.number:
@@ -264,7 +268,7 @@ class GhClient:
             page = ((d.get("data") or {}).get("repository") or {}).get("issues")
             if not page:
                 raise GhError(f"repo {repo} not found")
-            out += [(n["number"], n["id"]) for n in page["nodes"]]
+            out += [(n["number"], n["id"]) for n in page.get("nodes") or [] if n]
             if not page["pageInfo"]["hasNextPage"]:
                 return out
             after = page["pageInfo"]["endCursor"]

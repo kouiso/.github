@@ -89,7 +89,7 @@ def select_boards(client, args, refs: list[str], log) -> tuple[list[Board], list
             board = client.read_board(owner, num)
         except GhRateLimit:
             raise
-        except (GhError, KeyError, TypeError) as e:  # 返事の形が想定外（null など）も読めんかった扱い
+        except (GhError, KeyError, TypeError, AttributeError) as e:  # 返事の形が想定外（null など）も読めんかった扱い
             log(f"board failed board={ref} step=read: {e if isinstance(e, GhError) else repr(e)}")
             failed.append(ref)
             continue
@@ -147,7 +147,7 @@ def per_board(rn: Runner, board: Board, job: str, fn):
         return fn()
     except GhRateLimit:
         raise
-    except (GhError, KeyError, TypeError) as e:  # 返事の形が想定外（null など）もその Project だけの失敗にする
+    except (GhError, KeyError, TypeError, AttributeError) as e:  # 返事の形が想定外（null など）もその Project だけの失敗にする
         rn.log(f"board failed board={board.ref} job={job}: {e if isinstance(e, GhError) else repr(e)}")
         rn.counts[(board.ref, job, "failed")] += 1
         rn.failed = True
@@ -169,6 +169,7 @@ def run_jobs(rn: Runner, ctx: Ctx, jobs: list[str], unread: list[str] | None = N
         rn.log(f"skipped job={job}: shared capacity unknown, unread boards={','.join(unread)}")
         rn.counts[("*", job, "skipped-unread")] += 1
         rn.failed = True
+        rn.shared_skipped = True
         return False
 
     for job in jobs:
@@ -247,7 +248,14 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         if cap_board:
             cap_desc = cap_board.description
         else:
-            cap_desc = client.read_board_head(*split_ref(cap_ref))[1] if cap_ref else ""
+            try:
+                cap_desc = client.read_board_head(*split_ref(cap_ref))[1] if cap_ref else ""
+            except GhRateLimit:
+                raise
+            except (GhError, KeyError, TypeError, AttributeError) as e:
+                # 量の目印が読めんだけ。実績の点で代わりに数える（回ごとは止めん）
+                log(f"capacity board unreadable board={cap_ref}: {e if isinstance(e, GhError) else repr(e)}")
+                cap_desc = ""
         cap = parse_capacity(cap_desc)
         # 点の目印が無い時（目印が無い・時間の古い目印）は、前の 3 週の実績の点をその回の量にする。
         # 既定の小さい点を使うと、月曜に量を置き換えるまでの毎晩の見込み無しが今週の物をほぼ全部押し出すため
@@ -273,12 +281,13 @@ def _tick(args, client, halt, state_dir: Path, log) -> int:
         log(f"count board={key[0]} job={key[1]} {key[2]}={n}")
     if args.dry_run:  # 読めた Project の分は、1 つ失敗しても出す
         sys.stdout.write(rn.csv_text())
+    # 手で 1 つだけ走らせた回は、週・日に 1 回の仕事の目印にせん。
+    # 1 つの Project の仕事が落ちただけなら目印は進める（進めんと日・週に 1 回の仕事が 15 分ごとに走り続ける）。
+    # 進めんのは、読めん Project があって全 Project で分け合う仕事を飛ばした回だけ（次の回でやり直す）
+    if not args.dry_run and args.job == "all" and not rn.shared_skipped:
+        (state_dir / "last-run").write_text(now.isoformat(timespec="seconds") + "\n")
     if rn.failed:
         return 1
-    if args.dry_run:
-        return 0
-    if args.job == "all":  # 手で 1 つだけ走らせた回は、週・日に 1 回の仕事の目印にせん
-        (state_dir / "last-run").write_text(now.isoformat(timespec="seconds") + "\n")
     return 0
 
 

@@ -114,6 +114,7 @@ class Runner:
         self.writes = 0
         self.consecutive_failures = 0
         self.failed = False
+        self.shared_skipped = False  # 全 Project で分け合う仕事を、読めん Project があって飛ばした回
 
     # ---- 共通 ----
     def row(self, board: Board, job: str, action: str, item: Item | None = None, from_week="", to_week="", reason=""):
