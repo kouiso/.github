@@ -72,8 +72,15 @@ ISSUES_Q = """query($o:String!,$r:String!,$after:String){repository(owner:$o,nam
  pageInfo{hasNextPage endCursor} nodes{id number}}}}"""
 
 
-def _key(repo: dict, number: int) -> str:
+def _key(repo: dict | None, number: int) -> str | None:
+    """repository が null（消えた・見えん repo）の時は None。"""
+    if not repo or not repo.get("nameWithOwner"):
+        return None
     return f'{repo["nameWithOwner"]}#{number}'
+
+
+# 書く直前の読み直しで、その課題が盤から消えとった時の印。どの Iteration の id とも一致せんので race として飛ばす
+ITEM_GONE = "\0gone"
 
 
 def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> Board:
@@ -105,15 +112,20 @@ def parse_board(node: dict, owner: str, number: int, item_nodes: list[dict]) -> 
         kind = c.get("__typename") or "DraftIssue"
         it = Item(item_id=nd["id"], kind=kind, position=pos)
         if kind == "Issue":
-            it.repo = c["repository"]["nameWithOwner"]
+            repo = c.get("repository") or {}
+            if not repo.get("nameWithOwner"):
+                continue  # 消えた・見えん repo の課題は読めんので数にも入れん（1 枚のために盤全部を落とさん）
+            it.repo = repo["nameWithOwner"]
             it.number = c["number"]
             it.node_id = c.get("id") or ""
             it.state = c.get("state") or ""
             it.updated_at = parse_ts(c.get("updatedAt"))
             it.closed_at = parse_ts(c.get("closedAt"))
             if c.get("parent"):
-                it.parent = _key(c["parent"]["repository"], c["parent"]["number"])
-            it.children = [_key(s["repository"], s["number"]) for s in ((c.get("subIssues") or {}).get("nodes") or [])]
+                it.parent = _key(c["parent"].get("repository"), c["parent"].get("number"))
+            kids = [_key((s or {}).get("repository"), (s or {}).get("number"))
+                    for s in ((c.get("subIssues") or {}).get("nodes") or [])]
+            it.children = [k for k in kids if k]
         elif kind == "PullRequest":
             it.number = c.get("number") or 0
         numbers: dict[str, float] = {}
@@ -212,7 +224,10 @@ class GhClient:
     def read_item_fields(self, board: Board, item: Item) -> str | None:
         """書く直前に読み直す今の Iteration の id。"""
         d = self._gql(ITEM_FIELDS_Q, id=item.item_id)
-        for fv in d["data"]["node"]["fieldValues"]["nodes"]:
+        node = (d.get("data") or {}).get("node")
+        if not node:
+            return ITEM_GONE
+        for fv in (node.get("fieldValues") or {}).get("nodes") or []:
             fname = ((fv or {}).get("field") or {}).get("name")
             if fname == "Iteration" and "iterationId" in fv:
                 return fv["iterationId"]
@@ -220,13 +235,18 @@ class GhClient:
 
     def list_status_updates(self, board: Board) -> list[str]:
         d = self._gql(STATUS_UPDATES_Q, id=board.project_id)
-        return [n["body"] or "" for n in d["data"]["node"]["statusUpdates"]["nodes"]]
+        node = (d.get("data") or {}).get("node")
+        if not node:
+            raise GhError(f"board {board.ref} not found")
+        return [(n or {}).get("body") or "" for n in (node.get("statusUpdates") or {}).get("nodes") or []]
 
     def list_mapped_repos(self, board: Board) -> list[str]:
         out, after = [], None
         while True:
             d = self._gql(REPOS_Q, login=board.owner, after=after)
-            page = d["data"]["repositoryOwner"]["repositories"]
+            page = ((d.get("data") or {}).get("repositoryOwner") or {}).get("repositories")
+            if not page:
+                raise GhError(f"owner {board.owner} not found")
             for r in page["nodes"]:
                 text = (r.get("object") or {}).get("text") or ""
                 tgt = parse_yml_target(text)
@@ -241,7 +261,9 @@ class GhClient:
         out, after = [], None
         while True:
             d = self._gql(ISSUES_Q, o=o, r=r, after=after)
-            page = d["data"]["repository"]["issues"]
+            page = ((d.get("data") or {}).get("repository") or {}).get("issues")
+            if not page:
+                raise GhError(f"repo {repo} not found")
             out += [(n["number"], n["id"]) for n in page["nodes"]]
             if not page["pageInfo"]["hasNextPage"]:
                 return out

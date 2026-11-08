@@ -365,11 +365,18 @@ def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
         return []
     full = sorted(board.iterations + added, key=lambda i: i.start)
     if not rn.dry_run:
+        blocked = None
         if not ({board.ref, "*"} & rn.extend_verified):
             # 反復の設定を丸ごと書き直す呼び出しが id を保つかは、試しの写しで測るまで分からん（保たんと全件の週が消える）
-            rn.log(f"extend blocked board={board.ref}: not listed in extend-verified.txt")
+            blocked = "not listed in extend-verified.txt"
+        elif not board.iteration_start:
+            # 週が 1 つも無い盤は設定の始まりの日が読めん。書かずに飛ばす（人が最初の週を作る）
+            blocked = "no iteration to start from"
+        if blocked:
+            # 前提が揃ってないだけで gh の失敗やない。回の失敗にすると last-run が進まず、日・週に 1 回の仕事が毎回走る
+            rn.log(f"extend blocked board={board.ref}: {blocked}")
+            rn.row(board, "extend", "blocked", from_week="", to_week="", reason=blocked)
             rn.counts[(board.ref, "extend", "blocked")] += 1
-            rn.failed = True
             return []
         before = rn.client.read_board(board.owner, board.number)
         counts_before = Counter(i.iteration_id for i in before.items if i.iteration_id)

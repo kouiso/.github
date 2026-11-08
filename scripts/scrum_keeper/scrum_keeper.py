@@ -89,8 +89,8 @@ def select_boards(client, args, refs: list[str], log) -> tuple[list[Board], list
             board = client.read_board(owner, num)
         except GhRateLimit:
             raise
-        except GhError as e:
-            log(f"board failed board={ref} step=read: {e}")
+        except (GhError, KeyError, TypeError) as e:  # 返事の形が想定外（null など）も読めんかった扱い
+            log(f"board failed board={ref} step=read: {e if isinstance(e, GhError) else repr(e)}")
             failed.append(ref)
             continue
         if "Iteration" not in board.field_ids:
@@ -147,8 +147,8 @@ def per_board(rn: Runner, board: Board, job: str, fn):
         return fn()
     except GhRateLimit:
         raise
-    except GhError as e:
-        rn.log(f"board failed board={board.ref} job={job}: {e}")
+    except (GhError, KeyError, TypeError) as e:  # 返事の形が想定外（null など）もその Project だけの失敗にする
+        rn.log(f"board failed board={board.ref} job={job}: {e if isinstance(e, GhError) else repr(e)}")
         rn.counts[(board.ref, job, "failed")] += 1
         rn.failed = True
         return None

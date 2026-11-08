@@ -265,10 +265,16 @@ def test_12_extend_keeps_three_weeks_ahead_preserves_ids_and_halts_on_loss(tmp_p
     assert run(tmp_path / "roomy", roomy, job="extend") == 0
     assert week(roomy, "o/1", 140) is None
     # 反復の設定を書き直して id が保たれるかを測り終えた Project だけ、本番で書く
+    # 載ってない時は書かんが、gh の失敗やないので回は止めず last-run も進める（日・週に 1 回の仕事を毎回走らせん）
     blocked = make_client(mk())
-    assert run(tmp_path / "blocked", blocked, job="extend", verified=None) == 1
+    assert run(tmp_path / "blocked", blocked, job="all", verified=None) == 0
     assert not [w for w in blocked.writes if w[0] == "iterations"]
+    assert (tmp_path / "blocked" / "state" / "last-run").exists()
     assert run(tmp_path / "blocked2", blocked, "--dry-run", job="extend", verified=None) == 0
+    # 週が 1 つも無い盤は設定の始まりの日が読めんので書かずに飛ばす。これも回の失敗にせん
+    empty = make_client(make_board([], weeks=[]))
+    assert run(tmp_path / "empty", empty, job="extend") == 0
+    assert not [w for w in empty.writes if w[0] == "iterations"]
 
     class Lossy(FakeClient):
         def update_iteration_config(self, board, iterations):
@@ -724,3 +730,47 @@ def test_27_same_value_move_is_not_written(tmp_path):
     rn = Runner(c, Ledger(tmp_path / "l", None), False, 50)
     assert rn.execute_moves(board, "okawari", [Move(pbi, "it-2026-11-09"), Move(pbi, "it-2026-11-09")]) == 0
     assert c.writes == [] and not (tmp_path / "l" / "K.jsonl").exists()
+
+
+# 28. 返事に null が混ざっても（消えた repo の課題・盤から外れた課題）回ごと落ちん
+def test_28_null_nodes_do_not_crash_the_tick(tmp_path, capsys):
+    from scrum_keeper.github_client import ITEM_GONE, parse_board
+    from helpers import raw_project
+    node = raw_project([{"n": 1, "week": CUR}, {"n": 2, "week": CUR}])
+    node["items"]["nodes"][0]["content"]["repository"] = None   # 消えた・見えん repo の課題
+    node["items"]["nodes"][1]["content"]["subIssues"]["nodes"] = [None, {"number": 3, "repository": None}]
+    b = parse_board(node, "o", 1, node["items"]["nodes"])
+    assert [i.number for i in b.items if i.kind == "Issue"] == [2]
+    assert b.items[0].children == []
+
+    gh = GhClient()
+    gh._gql = lambda q, **kw: {"data": {"node": None}}
+    assert gh.read_item_fields(b, b.items[0]) == ITEM_GONE      # 書く直前に盤から外れとった
+    for call in (lambda: gh.list_status_updates(b), lambda: gh.list_mapped_repos(b), lambda: gh.list_open_issues("o/r")):
+        try:
+            call()
+        except GhError:
+            pass
+        else:
+            raise AssertionError("null の返事は GhError にする")
+
+    # 書く直前の読み直しで消えとったら race として飛ばす（書かん）
+    c = make_client(make_board([{"n": 20, "week": "2026-10-26"}]))
+    c.read_item_fields = lambda board, it: ITEM_GONE
+    assert run(tmp_path, c, job="carryover") == 0
+    assert not [w for w in c.writes if w[0] != "add"]
+
+    # 想定外の形（KeyError・TypeError）はその Project だけの失敗。残りの Project は回る
+    class Odd(FakeClient):
+        def read_board(self, owner, number):
+            if number == 2:
+                raise TypeError("'NoneType' object is not subscriptable")
+            return super().read_board(owner, number)
+
+    rows = [{"n": 1000, "week": "2026-10-26"}]
+    c2 = Odd({"o/1": make_board(rows, number=1), "o/2": make_board(rows, number=2)})
+    capsys.readouterr()
+    assert run(tmp_path / "odd", c2, "--board", "o/2", job="carryover") == 1
+    err = capsys.readouterr().err
+    assert "board failed board=o/2 step=read: TypeError" in err
+    assert {w[1] for w in moved(c2)} == {"o/1"}
