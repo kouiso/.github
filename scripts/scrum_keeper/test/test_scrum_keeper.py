@@ -235,10 +235,10 @@ def test_11_board_position_order_ignores_priority_and_story_point(tmp_path):
     assert "orderBy:{field:POSITION,direction:ASC}" in sent[0][0]
 
 
-# 12. extend は今週と 3 週先まで（4 本）を保ち、既存の id を残す。新しい週の題は「Iteration N」。件数が減ったら HALT
+# 12. extend は今週と 3 週先まで（4 本）を保ち、既存の id を残す。新しい週の題は「2026-Wnn (mm/dd-mm/dd)」。件数が減ったら HALT
 def test_12_extend_keeps_three_weeks_ahead_preserves_ids_and_halts_on_loss(tmp_path):
     weeks = monday_range(n=5)  # 10-19 〜 11-16（今週から数えて 3 本）
-    titles = {"2026-10-19": "Iteration 5", "2026-10-26": "Sprint 2026-10-26", "2026-11-09": "Iteration 2"}
+    titles = {"2026-10-19": "2026-W43 (10/19-10/25)", "2026-10-26": "Sprint 2026-10-26", "2026-11-09": "Iteration 2"}
     fillers = [{"n": 130 + k, "week": w, "est": 176} for k, w in enumerate(["2026-11-02", "2026-11-09", "2026-11-16"])]
     items = fillers + [{"n": 120, "prio": "P0", "est": 10}, {"n": 121, "prio": "P1", "est": 10}]
     mk = lambda: make_board(items, weeks=weeks, iter_titles=titles)
@@ -250,16 +250,16 @@ def test_12_extend_keeps_three_weeks_ahead_preserves_ids_and_halts_on_loss(tmp_p
     ahead = [i for i in its if i.start >= dt.date.fromisoformat(CUR)]
     assert [i.start.isoformat() for i in ahead] == ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]
     new = ahead[-1]
-    assert new.title == "Iteration 6" and new.duration == 7  # 終わった週の Iteration 5 も数えて次の番号
+    assert new.title == "2026-W48 (11/23-11/29)" and new.duration == 7  # 既存の題（新旧混ざり）に左右されん
     assert week(c, "o/1", 120) == "2026-11-23" and week(c, "o/1", 121) == "2026-11-23"
     assert week(c, "o/1", 130) == CUR
     assert run(tmp_path, c, job="extend") == 0
     assert len(c.boards["o/1"].iterations) == len(its)  # 2 回目は何も足さん
-    # 「Iteration N」が 1 つも無ければ 1 から。足りん週が 2 つなら続き番号
+    # 足りん週が 3 つなら、どれも始まりの日から題が決まる
     fresh = make_client(make_board([], weeks=monday_range(n=3)))
     assert run(tmp_path / "fresh", fresh, job="extend") == 0
     assert [i.title for i in fresh.boards["o/1"].iterations if i.start >= dt.date.fromisoformat(CUR)] == \
-        ["Sprint 2026-11-02", "Iteration 1", "Iteration 2", "Iteration 3"]
+        ["Sprint 2026-11-02", "2026-W46 (11/09-11/15)", "2026-W47 (11/16-11/22)", "2026-W48 (11/23-11/29)"]
     # 早い週に空きがあるなら、先の週へ隠さず週なしのまま残す（P0 を先の週に置かん）
     roomy = make_client(make_board([{"n": 140, "prio": "P0", "est": 10}], weeks=weeks))
     assert run(tmp_path / "roomy", roomy, job="extend") == 0
@@ -308,32 +308,27 @@ def test_12_extend_keeps_three_weeks_ahead_preserves_ids_and_halts_on_loss(tmp_p
 
     b = mk()
     from scrum_keeper.model import Iteration
-    Spy().update_iteration_config(b, b.iterations + [Iteration("new:2026-11-16", "Iteration 6", dt.date(2026, 11, 16))])
+    Spy().update_iteration_config(b, b.iterations + [Iteration("new:2026-11-16", "2026-W47 (11/16-11/22)", dt.date(2026, 11, 16))])
     assert all(f'id:"{i.id}"' in sent[0] for i in b.iterations)
-    assert '{title:"Iteration 6",startDate:"2026-11-16",duration:7}' in sent[0]
+    assert '{title:"2026-W47 (11/16-11/22)",startDate:"2026-11-16",duration:7}' in sent[0]
 
 
-# 12b. 新しい「Iteration N」の番号は始まりの日の順に増える。後ろの週に番号付きが在る隙間の週は足さず、ログに出す
-def test_12b_gap_week_is_not_numbered_out_of_date_order(tmp_path, capsys):
+# 12b. 盤が全部「2026-Wnn」の題でも、隙間の週・年またぎの週を始まりの日から正しい題で足す
+def test_12b_new_week_titles_follow_iso_week(tmp_path):
+    from scrum_keeper.model import iteration_title
     gap = monday_range(n=4) + ["2026-11-30"]  # 11-16・11-23 が抜けとる
-    later_numbered = make_client(make_board([], weeks=gap, iter_titles={"2026-11-30": "Iteration 9"}))
-    capsys.readouterr()
-    assert run(tmp_path, later_numbered, job="extend") == 0
-    err = capsys.readouterr().err
-    assert "extend skipped board=o/1 week=2026-11-16" in err and "week=2026-11-23" in err
-    assert not later_numbered.writes  # 既存の週の題も付け替えん
-    titles = [(i.start.isoformat(), i.title) for i in later_numbered.boards["o/1"].iterations]
-    assert ("2026-11-30", "Iteration 9") in titles and len(titles) == 5
-    # 後ろの週の題が番号付きでなければ順は崩れんので足す
-    later_plain = make_client(make_board([], weeks=gap))
-    assert run(tmp_path / "plain", later_plain, job="extend") == 0
-    added = {i.start.isoformat(): i.title for i in later_plain.boards["o/1"].iterations}
-    assert added["2026-11-16"] == "Iteration 1" and added["2026-11-23"] == "Iteration 2"
-    # 番号付きが隙間より前だけなら、続きの番号で足す
-    before = make_client(make_board([], weeks=gap, iter_titles={"2026-11-09": "Iteration 4"}))
-    assert run(tmp_path / "before", before, job="extend") == 0
-    got = [i.title for i in before.boards["o/1"].iterations if i.start >= dt.date(2026, 11, 9)]
-    assert got == ["Iteration 4", "Iteration 5", "Iteration 6", "Sprint 2026-11-30"]
+    titled = {w: iteration_title(dt.date.fromisoformat(w)) for w in gap}
+    assert titled["2026-11-30"] == "2026-W49 (11/30-12/06)"
+    c = make_client(make_board([], weeks=gap, iter_titles=titled))
+    assert run(tmp_path, c, job="extend") == 0
+    got = {i.start.isoformat(): i.title for i in c.boards["o/1"].iterations}
+    assert got["2026-11-16"] == "2026-W47 (11/16-11/22)" and got["2026-11-23"] == "2026-W48 (11/23-11/29)"
+    assert {w: got[w] for w in gap} == titled  # 既存の週の題は付け替えん
+    assert len(got) == 7
+    # ISO 週の年で数える: 12/28 始まりは 2026-W53、次は 2027-W01
+    assert iteration_title(dt.date(2026, 12, 28)) == "2026-W53 (12/28-01/03)"
+    assert iteration_title(dt.date(2027, 1, 4)) == "2027-W01 (01/04-01/10)"
+    assert iteration_title(dt.date(2025, 12, 29)) == "2026-W01 (12/29-01/04)"
 
 
 # 13. 相手は allow.txt ∩ scrum-board: v1。_ で始まる題の物は触らん
