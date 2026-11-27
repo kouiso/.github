@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 JST = dt.timezone(dt.timedelta(hours=9), "JST")
 DEFAULT_ESTIMATE = 2.0  # Story Point（旧 Estimate）が空の時に足す点。1・2・3・5・8・13 の小さい側に寄せ、付け忘れで量を食い過ぎんようにする
 ESTIMATE_FIELDS = ("Story Point", "Estimate")  # 前にある名前を先に読む。Estimate は名前の付け替えが済むまでの読み替え
-ITER_TITLE = "Iteration {}"  # GitHub の既定と同じ題。番号は終わった週も含めた一番大きい番号の次
-ITER_TITLE_RE = re.compile(r"^Iteration (\d+)$")
 ITERATION_DAYS = 7  # 週は月曜始まりの 7 日
 # 量の目印。単位は Story Point（pt）。前の決まりの時間（h）の目印も読むが、時間の値は点に読み替えられんので使わん
 CAPACITY_RE = re.compile(r"scrum-keeper:capacity=(\d+(?:\.\d+)?)(pt|h) count_from=(\d{4}-\d{2}-\d{2})")
@@ -43,6 +41,13 @@ def week_start(now: dt.datetime) -> dt.date:
 def days_to_sunday_inclusive(now: dt.datetime) -> int:
     """今日を含めて日曜までの日数。月曜 7、日曜 1。"""
     return 7 - to_jst(now).weekday()
+
+
+def iteration_title(start: dt.date) -> str:
+    """週の題。ISO 週番号と月曜〜日曜の日付で `2026-Wnn (mm/dd-mm/dd)`。年は ISO 週の年（12/28 始まりの週は 2026-W53）。"""
+    year, num, _ = start.isocalendar()
+    end = start + dt.timedelta(days=ITERATION_DAYS - 1)
+    return f"{year}-W{num:02d} ({start:%m/%d}-{end:%m/%d})"
 
 
 def parse_ts(text: str | None) -> dt.datetime | None:

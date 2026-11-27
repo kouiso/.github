@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .github_client import GhError, GhRateLimit
 from .ledger import Halted, HaltPresent, Ledger, LockBusy, halt_present, write_halt
-from .model import (Board, Item, Iteration, ITER_TITLE, ITER_TITLE_RE, ITERATION_DAYS, CAPACITY_RE, JST,
+from .model import (Board, Item, Iteration, ITERATION_DAYS, iteration_title, CAPACITY_RE, JST,
                     days_to_sunday_inclusive, to_jst, week_start)
 from .ordering import EPS, order_key, overflow
 
@@ -324,46 +324,16 @@ def find_mismatches(board: Board, week: dt.date) -> list[tuple[Item, str]]:
 
 
 # ------------------------------------------------------------------ extend
-def numbered_iterations(board: Board) -> list[tuple[dt.date, int]]:
-    """「Iteration N」の題を持つ週（終わった週も含む）の (始まりの日, N)。"""
-    return [(it.start, int(m.group(1))) for it in board.iterations if (m := ITER_TITLE_RE.match(it.title or ""))]
-
-
-def next_iteration_number(board: Board) -> int:
-    """「Iteration N」の題を持つ週（終わった週も含む）の一番大きい N の次。1 つも無ければ 1。"""
-    return max((n for _, n in numbered_iterations(board)), default=0) + 1
-
-
-def plan_new_iterations(board: Board, missing: list[dt.date]) -> tuple[list[Iteration], list[dt.date]]:
-    """足す週と、足さん週。番号は始まりの日の順に増える決まり（N は一番大きい番号の次）。
-
-    足りん週より後に「Iteration N」の週が既に在ると、新しい番号がその週より大きくなって日付の順と逆になる。
-    その週は足さん（既存の週の題も付け替えん）。
-    """
-    numbered = numbered_iterations(board)
-    nxt = next_iteration_number(board)
-    added, skipped = [], []
-    for d in sorted(missing):
-        if any(start > d for start, _ in numbered):
-            skipped.append(d)
-            continue
-        added.append(Iteration("new:" + d.isoformat(), ITER_TITLE.format(nxt), d, ITERATION_DAYS))
-        nxt += 1
-    return added, skipped
+def plan_new_iterations(missing: list[dt.date]) -> list[Iteration]:
+    """足す週。題は始まりの日から決まる `2026-Wnn (mm/dd-mm/dd)` なので、既存の週の題に左右されん。"""
+    return [Iteration("new:" + d.isoformat(), iteration_title(d), d, ITERATION_DAYS) for d in sorted(missing)]
 
 
 def job_extend(rn: Runner, board: Board, ctx: Ctx) -> list[dt.date]:
     missing = [d for d in window(ctx) if not board.iteration_by_start(d)]
     if not missing:
         return []
-    added, skipped = plan_new_iterations(board, missing)
-    for d in skipped:
-        rn.log(f"extend skipped board={board.ref} week={d.isoformat()}: a later Iteration N exists, "
-               "a new number would break date order")
-        rn.row(board, "extend", "skip-iteration", from_week="", to_week=d.isoformat(), reason="number-order")
-        rn.counts[(board.ref, "extend", "skipped")] += 1
-    if not added:
-        return []
+    added = plan_new_iterations(missing)
     full = sorted(board.iterations + added, key=lambda i: i.start)
     if not rn.dry_run:
         blocked = None
